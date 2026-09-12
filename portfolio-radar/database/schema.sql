@@ -31,6 +31,8 @@ create table public.pr_imports (
   files jsonb not null default '[]',
   rows jsonb not null default '[]',
   warnings jsonb not null default '[]',
+  correction boolean not null default false,
+  edit_row integer,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -79,8 +81,8 @@ create index pr_outbox_ready on public.pr_outbox(available_at,id) where state in
 create index pr_outbox_user on public.pr_outbox(user_id);
 create table public.pr_cache(key text primary key,value jsonb not null,expires_at timestamptz not null);
 create index pr_cache_expiry on public.pr_cache(expires_at);
-create table portfolio_private.worker_lock(id integer primary key check(id=1), token uuid,expires_at timestamptz not null default '-infinity');
-insert into portfolio_private.worker_lock(id) values(1);
+create table portfolio_private.worker_lock(id integer primary key check(id in (1,2)), token uuid,expires_at timestamptz not null default '-infinity');
+insert into portfolio_private.worker_lock(id) values(1),(2);
 alter table portfolio_private.worker_lock enable row level security;
 grant select,update on portfolio_private.worker_lock to service_role;
 create policy service_worker on portfolio_private.worker_lock to service_role using(true) with check(true);
@@ -105,20 +107,20 @@ revoke all on function portfolio_private.read_config() from public,anon,authenti
 grant execute on function portfolio_private.read_config() to service_role;
 create function public.pr_config() returns jsonb language sql security invoker set search_path='' as $$ select portfolio_private.read_config(); $$;
 
-create function public.pr_lock(p_token uuid) returns boolean language plpgsql security invoker set search_path='' as $$
+create function public.pr_lock(p_token uuid,p_lane integer default 1) returns boolean language plpgsql security invoker set search_path='' as $$
 begin
-  update portfolio_private.worker_lock set token=p_token,expires_at=now()+interval '150 seconds' where id=1 and expires_at<now();
+  update portfolio_private.worker_lock set token=p_token,expires_at=now()+interval '150 seconds' where id=p_lane and expires_at<now();
   return found;
 end $$;
-create function public.pr_unlock(p_token uuid) returns void language sql security invoker set search_path='' as $$
- update portfolio_private.worker_lock set expires_at='-infinity',token=null where id=1 and token=p_token;
+create function public.pr_unlock(p_token uuid,p_lane integer default 1) returns void language sql security invoker set search_path='' as $$
+ update portfolio_private.worker_lock set expires_at='-infinity',token=null where id=p_lane and token=p_token;
 $$;
 create function public.pr_enqueue(p_key text,p_kind text,p_payload jsonb,p_user bigint default null) returns void language sql security invoker set search_path='' as $$
  insert into public.pr_jobs(job_key,kind,payload,user_id) values(p_key,p_kind,p_payload,p_user) on conflict(job_key) do nothing;
 $$;
-create function public.pr_next_job() returns setof public.pr_jobs language sql security invoker set search_path='' as $$
+create function public.pr_next_job(p_lane integer default 1) returns setof public.pr_jobs language sql security invoker set search_path='' as $$
  update public.pr_jobs set state='running',attempts=attempts+1,lease_until=now()+interval '150 seconds'
- where id=(select id from public.pr_jobs where (state='pending' and available_at<=now()) or (state='running' and lease_until<now()) order by case kind when 'update' then 0 when 'extract' then 1 when 'research' then 2 else 3 end,id for update skip locked limit 1)
+ where id=(select id from public.pr_jobs where ((state='pending' and available_at<=now()) or (state='running' and lease_until<now())) and ((p_lane=1 and kind in ('update','extract')) or (p_lane=2 and kind in ('research','digest'))) order by case kind when 'update' then 0 when 'extract' then 1 when 'research' then 2 else 3 end,case when p_lane=2 then available_at else created_at end,id for update skip locked limit 1)
  returning *;
 $$;
 create function public.pr_daily_jobs() returns integer language plpgsql security invoker set search_path='' as $$
