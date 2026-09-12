@@ -265,7 +265,8 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
    }
    if(!timingSafe(req.headers.get('x-portfolio-worker-secret'),radar.config.worker_secret))return json({error:'unauthorized'},401);
    if(path==='work'){waitUntil(radar.work().catch(()=>console.error('portfolio_worker_failed')));return json({accepted:true});}
-   if(path==='register'){const base=req.url.slice(0,req.url.lastIndexOf('/'));return json(await radar.register(base));}
+   if(path==='probe'){const started=Date.now();try{const me=await radar.telegram('getMe',{});return json({ok:true,username:me.username,elapsed_ms:Date.now()-started});}catch(e){return json({ok:false,code:e.message,elapsed_ms:Date.now()-started});}}
+   if(path==='register'){try{const base=env.SUPABASE_URL.replace(/\/$/,'')+'/functions/v1/portfolio-radar';return json(await radar.register(base));}catch(e){return json({error:'registration_failed',code:e.message},502);}}
    if(path==='status')return json({telegram_configured:!!radar.config.telegram_token,ai_configured:!!radar.config.openai_key});
    return json({error:'not_found'},404);
   }catch{console.error('portfolio_request_failed');return json({error:'processing_failed'},500);}
