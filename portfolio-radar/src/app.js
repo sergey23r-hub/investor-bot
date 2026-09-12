@@ -33,7 +33,12 @@ export class Radar{
  }
  async user(id){
   let u=(await this.db.get('pr_users',{chat_id:'eq.'+id}))[0];
-  if(!u){u=(await this.db.post('pr_users',{chat_id:id}))[0];const a=(await this.db.post('pr_accounts',{user_id:id,name:'Основной'}))[0];u=(await this.db.patch('pr_users',{current_account:a.id},{chat_id:'eq.'+id}))[0];}
+  if(!u)u=(await this.db.post('pr_users',{chat_id:id}))[0];
+  if(!u.current_account){
+   let a=(await this.db.get('pr_accounts',{user_id:'eq.'+id,name:'eq.Основной',limit:1}))[0];
+   if(!a)a=(await this.db.post('pr_accounts',{user_id:id,name:'Основной'}))[0];
+   u=(await this.db.patch('pr_users',{current_account:a.id},{chat_id:'eq.'+id}))[0];
+  }
   return u;
  }
  async currentImport(user){return (await this.db.get('pr_imports',{user_id:'eq.'+user,status:'in.(uploading,processing,preview)',order:'created_at.desc',limit:1}))[0];}
@@ -41,23 +46,24 @@ export class Radar{
  async preview(job,user,imp){
   const a=(await this.db.get('pr_accounts',{id:'eq.'+imp.account_id,user_id:'eq.'+user,limit:1}))[0];
   const unresolved=imp.rows.filter(r=>!r.verified);let text=`<b>Проверьте портфель · ${html(a.name)}</b>\nРежим: ${imp.mode==='replace'?'заменить весь выбранный счёт':'обновить только показанные позиции'}\n\n`+formatPositions(imp.rows);
-  if(imp.warnings?.length)text+='\n\n'+imp.warnings.map(x=>'⚠️ '+html(String(x).slice(0,250))).join('\n');
-  if(!unresolved.length){const diff=changes(a.positions,mergePositions(a.positions,imp.rows,imp.mode));text+=`\n\nДобавлено: ${diff.added.length}. Изменено: ${diff.changed.length}. Удалено: ${diff.removed.length}.`;if(diff.removed.length)text+='\nБудут удалены: '+diff.removed.map(x=>html(x.name)).join(', ');}
+  if(imp.warnings?.length)text+='\n\n'+imp.warnings.slice(0,10).map(x=>'⚠️ '+html(String(x).slice(0,250))).join('\n');
+  if(unresolved.length)text+='\n\n'+unresolved.filter(r=>r.candidates?.length).slice(0,10).map(r=>html(r.name)+': '+r.candidates.map(c=>html(String(c).slice(0,100))).join('; ')).join('\n\n');
+  if(!unresolved.length){const diff=changes(a.positions,mergePositions(a.positions,imp.rows,imp.mode));text+=`\n\nДобавлено: ${diff.added.length}. Изменено: ${diff.changed.length}. Удалено: ${diff.removed.length}.`;if(diff.removed.length)text+='\nБудут удалены: '+diff.removed.slice(0,10).map(x=>html(x.name)).join(', ')+(diff.removed.length>10?' и ещё '+(diff.removed.length-10):'');}
   else text+='\n\nНужно уточнить '+unresolved.length+' позиций. Пример: /fix 2 SBER 10 или /fix 2 crypto:bitcoin 0.15. Знак ? — количество неизвестно.';
-  const keys=[];if(!unresolved.length)keys.push([{text:'Всё верно — сохранить',callback_data:'save:'+imp.id}]);keys.push([{text:imp.mode==='partial'?'Заменить весь счёт':'Обновить только показанные',callback_data:'mode:'+imp.id}],[{text:'Отменить загрузку',callback_data:'cancel:'+imp.id}]);
+  const keys=[];if(!unresolved.length)keys.push([{text:'Всё верно — сохранить',callback_data:'save:'+imp.id}]);keys.push([{text:imp.mode==='partial'?'Заменить весь счёт':'Обновить только показанные',callback_data:(imp.mode==='partial'?'replace:':'partial:')+imp.id}],[{text:'Отменить загрузку',callback_data:'cancel:'+imp.id}]);
   await this.reply(job,user,text,keys,'preview');
  }
  async handleUpdate(job){
   const update=job.payload,cb=update.callback_query,msg=cb?.message||update.message;
   const id=cb?.from?.id||msg?.from?.id;
   if(!Number.isSafeInteger(id)||id<=0||msg?.chat?.type!=='private'||msg.chat.id!==id)return;
-  const user=await this.user(id);await this.db.patch('pr_jobs',{user_id:id},{id:'eq.'+job.id});
+  const user=await this.user(id);job.user_id=id;await this.db.patch('pr_jobs',{user_id:id},{id:'eq.'+job.id});
   if(cb){
    // Callback answer is a UI acknowledgement, never a financial action.
    await this.telegram('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
    const [action,ref]=String(cb.data||'').split(':');
-   if(action==='forget'&&ref==='yes'){await this.db.rpc('pr_forget',{p_user:id});return;}
-   if(!['save','mode','cancel'].includes(action))return;
+   if(action==='forget'&&ref==='yes'){await this.db.rpc('pr_forget',{p_user:id});await this.telegram('sendMessage',{chat_id:id,text:'Ваши портфели и история удалены. Рассылка остановлена.'}).catch(()=>{});return;}
+   if(!['save','partial','replace','cancel'].includes(action))return;
    const imp=(await this.db.get('pr_imports',{id:'eq.'+ref,user_id:'eq.'+id,limit:1}))[0];
    if(!imp)return this.reply(job,id,'Эта загрузка больше недоступна.');
    if(action==='save'){
@@ -66,7 +72,7 @@ export class Radar{
    }
    if(!['uploading','preview'].includes(imp.status))return this.reply(job,id,'Загрузка уже обработана или обрабатывается.');
    if(action==='cancel'){await this.db.patch('pr_imports',{status:'cancelled',files:[]},{id:'eq.'+imp.id});return this.reply(job,id,'Загрузка отменена. Портфель сохранён в прежнем виде.');}
-   imp.mode=imp.mode==='partial'?'replace':'partial';await this.db.patch('pr_imports',{mode:imp.mode},{id:'eq.'+imp.id});return this.preview(job,id,imp);
+   imp.mode=action;await this.db.patch('pr_imports',{mode:imp.mode},{id:'eq.'+imp.id});return this.preview(job,id,imp);
   }
   const file=extractFile(msg);
   if(file){
@@ -89,7 +95,7 @@ export class Radar{
    const imp=await this.currentImport(id);if(!imp?.files.length)return this.reply(job,id,'Сначала пришлите скриншот.');
    if(imp.status==='preview')return this.preview(job,id,imp);
    if(imp.status==='processing')return this.reply(job,id,'Распознавание уже идёт. Результат придёт отдельным сообщением.');
-   await this.db.patch('pr_imports',{status:'processing'},{id:'eq.'+imp.id});await this.queue(`extract:${imp.id}:${job.id}`,'extract',{import_id:imp.id,chat_id:id},id);
+   await this.queue(`extract:${imp.id}:${job.id}`,'extract',{import_id:imp.id,chat_id:id},id);await this.db.patch('pr_imports',{status:'processing'},{id:'eq.'+imp.id});
    return this.reply(job,id,'Распознаю позиции. Затем покажу список для проверки.');
   }
   if(cmd==='/account'){
@@ -105,12 +111,13 @@ export class Radar{
   }
   if(cmd==='/fix'){
    const imp=await this.currentImport(id);if(imp?.status!=='preview')return this.reply(job,id,'Исправление доступно после распознавания, до сохранения.');
+   if(imp.last_edit_key===String(job.id))return this.preview(job,id,imp);
    const i=Number(args[0])-1,code=args[1],quantity=args[2];
    if(!Number.isInteger(i)||i<0||i>=imp.rows.length||!code||quantity===undefined)return this.reply(job,id,'Формат: /fix 2 SBER 10. Для крипты: /fix 2 crypto:bitcoin 0.15. Неизвестное количество: ?');
    const raw={...imp.rows[i],name:code,symbol:code,isin:/^[A-Z]{2}[A-Z0-9]{10}$/.test(code)?code:null,quantity:decimal(quantity),issue:null};
    if(code.startsWith('crypto:')){raw.kind='crypto';raw.provider_id=code.slice(7);raw.name=code.slice(7);raw.symbol=null;}
    const resolved=await this.providers.resolve(raw);imp.rows[i]=resolved;imp.rows=normalizeRows(imp.rows);
-   await this.db.patch('pr_imports',{rows:imp.rows},{id:'eq.'+imp.id});return this.preview(job,id,imp);
+   await this.db.patch('pr_imports',{rows:imp.rows,last_edit_key:String(job.id)},{id:'eq.'+imp.id});return this.preview(job,id,imp);
   }
   if(cmd==='/brief'){
    const all=await this.db.get('pr_accounts',{user_id:'eq.'+id});if(!all.some(a=>a.positions.length))return this.reply(job,id,'Сначала загрузите и подтвердите портфель.');
