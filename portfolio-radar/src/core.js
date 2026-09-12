@@ -12,7 +12,7 @@ export function decimal(value) {
   return i+(f?'.'+f:'');
 }
 export function safeUrl(value) {
-  try { const u=new URL(value); if(u.protocol!=='https:' || u.username || u.password) return null; return u.href; } catch { return null; }
+  try { if(String(value).length>1000)return null;const u=new URL(value); if(u.protocol!=='https:' || u.username || u.password) return null; return u.href; } catch { return null; }
 }
 export function canonicalUrl(value) {
   const s=safeUrl(value); if(!s)return null; const u=new URL(s); u.hash='';
@@ -98,13 +98,14 @@ export function digestText({accounts,quotes,news,market,now=new Date()}){
   for(const account of accounts){
     lines.push(`<b>${html(account.name)}</b> · состав обновлён ${new Date(account.updated_at).toLocaleDateString('ru-RU',{timeZone:'Europe/Moscow'})}`);
     for(const p of account.positions){
+      if(p.provider==='cash'){lines.push(`<b>${html(p.name)}</b> · денежный остаток: ${html(p.quantity??'не указан')} ${html(p.currency??p.provider_id??'')}`);continue;}
       const q=quotes[p.key],n=news[p.key];let block=`<b>${html(p.name)}</b>`;
       if(q?.price!=null)block+=` · ${html(q.price)} ${html(q.currency)}${q.change_pct!=null?' ('+(Number(q.change_pct)>0?'+':'')+Number(q.change_pct).toFixed(2)+'%)':''}\nКотировка: ${html(q.as_of)} · ${html(q.basis)}`;
       else block+='\nСвежая котировка недоступна.';
       if(!p.verified){block+='\nУточните инструмент в портфеле — персональные новости пока не подбираются.';}
       else if(n?.status==='ok'){
         const fresh=n.items.filter(x=>!seenNews.has(x.url));
-        if(fresh.length)block+='\n'+fresh.map(x=>{seenNews.add(x.url);return `${html(x.fact)}\nЗначение: ${html(x.relevance)}\n<a href="${html(x.url)}">Источник · ${html(x.published_at.slice(0,10))}</a>`;}).join('\n');
+        if(fresh.length)block+='\n'+fresh.map(x=>{seenNews.add(x.url);return `${html(x.fact)}\nЗначение: ${html(x.relevance)}\n<a href="${html(x.url)}">Источник · ${html(x.published_at.slice(0,10))}</a>`;}).join('\n\n');
         else block+='\n'+(n.items.length?'Связанная новость уже приведена выше.':'Значимых новостей за последние 24 часа не найдено.');
         if(n.events?.length)block+='\nБлижайшее: '+n.events.map(e=>`${html(e.date)} — ${html(e.title)} <a href="${html(e.url)}">источник</a>`).join('; ');
       }else block+='\nНе удалось проверить новости; это не означает отсутствие событий.';
