@@ -4,7 +4,7 @@ Telegram-бот принимает скриншоты криптовалют, а
 
 ## Состояние
 
-Серверная часть и база развёрнуты в существующем Supabase-проекте Telegram Strategy bot, отдельно от таблиц клуба. Сам Telegram-бот пока не подключён: нужны новый Telegram bot token и API-ключ OpenAI. Реальное распознавание пользовательского скриншота и отправку в Telegram следует проверить после подключения ключей. Текущие тесты не заменяют эту проверку.
+Сервис активирован: https://t.me/portfolius_bot. Серверная часть и база работают в существующем Supabase-проекте Telegram Strategy bot. Ключи Telegram и OpenAI подключены через Vault; значения не входят в код. Webhook и меню команд зарегистрированы. Живое распознавание синтетического скриншота проверено на BTC 0.125, ETH 2.5 и MSFT 12; реальный вызов web search также выполнен. Пользовательскую доставку и распознавание интерфейса конкретного брокера нужно проверить после первого /start и загрузки реального портфеля.
 
 Health: https://swlwrhkfcmsexscfsrtc.supabase.co/functions/v1/portfolio-radar/health
 
@@ -24,7 +24,7 @@ Health: https://swlwrhkfcmsexscfsrtc.supabase.co/functions/v1/portfolio-radar/he
 
 ## Проверка
 
-`npm test` — тесты встроенным Node test runner, без установки зависимостей.
+`npm test` — 24 теста встроенным Node test runner, без установки зависимостей.
 
 `database/verify.sql` — интеграционные проверки в транзакции с ROLLBACK: изоляция пользователей, частичное/полное обновление, точность количества, защита от старой версии, повторное подтверждение, удаление позиции с нулём, блокировка нераспознанных активов, дедупликация заданий, удаление данных.
 
@@ -43,7 +43,7 @@ Health: https://swlwrhkfcmsexscfsrtc.supabase.co/functions/v1/portfolio-radar/he
 
 ## Развёртывание
 
-Код не требует npm-зависимостей: стандартные Fetch API, Web Crypto и PostgreSQL REST/RPC. Edge entrypoint — `src/index.ts`, вместе с `src/*.js` и `deno.json`. `verify_jwt=false` нужен для Telegram; вместо JWT внутри проверяются раздельные случайные секреты webhook и worker.
+Код не требует npm-зависимостей: стандартные Fetch API, Web Crypto и PostgreSQL REST/RPC. Edge entrypoint — `src/index.ts`, вместе с `src/*.js` и `deno.json`. При повторном deploy через connector явно передавать `import_map_path: deno.json`, чтобы не наследовался абсолютный путь предыдущей сборки. URL регистрации webhook строится из SUPABASE_URL, а не внутреннего req.url Edge Runtime. `verify_jwt=false` нужен для Telegram; вместо JWT внутри проверяются раздельные случайные секреты webhook и worker.
 
 SQL применён двумя именованными удалёнными миграциями: `portfolio_radar_core`, `portfolio_radar_scheduler`. Повторно запускать schema.sql поверх существующих таблиц нельзя. Для изменений создавать следующую миграцию. SQL cron содержит адрес выбранного проекта и при переносе должен быть изменён.
 
