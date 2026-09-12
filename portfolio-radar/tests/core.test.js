@@ -105,3 +105,13 @@ test('news response with invented source is not reported as no news',async()=>{
  globalThis.fetch=async()=>Response.json({status:'completed',output:[{type:'web_search_call',status:'completed',action:{sources:[{url:'https://real.example'}]}},{type:'message',content:[{type:'output_text',text:JSON.stringify({items:[story],events:[]})}]}]});
  try{const n=await new Providers({openai_key:'test-key'},{}).news({key:'stock',name:'x'},now);assert.equal(n.status,'unverified');assert.equal(n.items.length,0);}finally{globalThis.fetch=old;}
 });
+test('registration uses configured public origin rather than internal request URL',async()=>{
+ const original=Radar.prototype.register;let target;
+ Radar.prototype.register=async function(base){target=base;return {username:'test_bot'};};
+ try{
+  const db={rpc:async()=>({worker_secret:'worker'})};
+  const handler=createHandler({SUPABASE_URL:'https://public-project.supabase.co/'},()=>{},db);
+  const response=await handler(new Request('http://internal-runtime:9000/portfolio-radar/register',{method:'POST',headers:{'x-portfolio-worker-secret':'worker'}}));
+  assert.equal(response.status,200);assert.equal(target,'https://public-project.supabase.co/functions/v1/portfolio-radar');
+ }finally{Radar.prototype.register=original;}
+});
