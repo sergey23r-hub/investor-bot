@@ -12,7 +12,7 @@ declare config jsonb;
 begin
  config:=portfolio_private.read_config();
  if not (config ? 'telegram_token') then return;end if;
- if exists(select 1 from portfolio_private.worker_lock where id=1 and expires_at>now()) then return;end if;
+ if (select count(*) from portfolio_private.worker_lock where expires_at>now())=2 then return;end if;
  if not exists(select 1 from public.pr_jobs where (state='pending' and available_at<=now()) or (state='running' and lease_until<now()))
     and not exists(select 1 from public.pr_outbox where state='pending' and available_at<=now())
     and not exists(select 1 from public.pr_users u where u.subscribed and (now() at time zone u.timezone)::time>=u.digest_time
