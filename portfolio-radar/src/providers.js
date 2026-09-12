@@ -40,12 +40,14 @@ export class Providers{
       }catch{return unresolved('Не удалось проверить криптоактив. Повторите распознавание позже.');}
     }
     if(raw.kind==='cash')return {...clean,key:`cash:${String(raw.currency||raw.symbol||raw.name).toUpperCase()}`,verified:true,provider:'cash',provider_id:raw.currency||raw.symbol||raw.name,issue:null};
+    let moexCandidates=[];
     try{
       const data=await this.memo('resolve:moex:'+query,86400,()=>fetchJson('https://iss.moex.com/iss/securities.json?iss.meta=off&limit=100&q='+encodeURIComponent(query)));
       const all=moexRows(data.securities).filter(c=>c.is_traded===1);
       const matches=all.filter(c=>[c.secid,c.isin,c.name,c.shortname].some(x=>x&&x.toUpperCase()===String(query).toUpperCase()));
       if(matches.length===1){const c=matches[0];return {...clean,name:c.name||c.shortname,symbol:c.secid,isin:c.isin,key:`moex:${c.secid}`,provider:'moex',provider_id:c.secid,verified:true,issue:null,kind:String(c.group||'').includes('bond')?'bond':clean.kind};}
-      if(matches.length>1||all.length)return unresolved('Уточните тикер или ISIN конкретного выпуска.',all.slice(0,8).map(c=>`${c.secid}: ${c.shortname}`));
+      moexCandidates=all.slice(0,8).map(c=>`${c.secid}: ${c.shortname}`);
+      if(matches.length>1||raw.isin)return unresolved('Уточните тикер или ISIN конкретного выпуска.',moexCandidates);
     }catch{/* Try US catalog; otherwise retain unresolved row. */}
     if(raw.kind==='stock'||raw.kind==='fund'){
       try{
@@ -54,7 +56,7 @@ export class Providers{
         if(matches.length===1){const c=matches[0];return {...clean,name:c.title,symbol:c.ticker,key:`sec:${c.cik_str}:${c.ticker}`,provider:'finnhub',provider_id:c.ticker,cik:String(c.cik_str),verified:true,issue:null,currency:'USD'};}
       }catch{}
     }
-    return unresolved('Не удалось однозначно определить инструмент. Укажите тикер, ISIN или полное название.');
+    return unresolved('Не удалось однозначно определить инструмент. Укажите тикер, ISIN или полное название.',moexCandidates);
   }
   async quote(p){
     const unavailable={status:'unavailable',price:null,currency:p.currency??null};
