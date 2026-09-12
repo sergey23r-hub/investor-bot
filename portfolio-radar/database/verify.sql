@@ -31,6 +31,8 @@ begin
  blocked:=false;
  begin perform public.pr_commit(i,u);exception when others then blocked:=sqlerrm='unresolved_rows';end;
  if not blocked then raise exception 'QA unresolved asset committed';end if;
+ perform public.pr_commit(i,u,true);
+ if not exists(select 1 from public.pr_accounts a2,jsonb_array_elements(a2.positions) p where a2.id=a and p->>'key'='mystery' and p->>'verified'='false') then raise exception 'QA acknowledged unresolved observation not retained';end if;
  perform public.pr_enqueue('qa-dedup','digest',jsonb_build_object('chat_id',u),u);
  perform public.pr_enqueue('qa-dedup','digest',jsonb_build_object('chat_id',u),u);
  if (select count(*) from public.pr_jobs where job_key='qa-dedup')<>1 then raise exception 'QA duplicate job';end if;
