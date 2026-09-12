@@ -1,4 +1,4 @@
-import {LIMITS,html,normalizeRows,formatPositions,splitText,extractFile,digestText,mergePositions,changes,decimal,validateNews} from './core.js';
+import {LIMITS,html,normalizeRows,prepareRows,formatPositions,splitText,extractFile,digestText,mergePositions,changes,decimal,validateNews} from './core.js';
 import {Providers,extractPortfolio,fetchJson} from './providers.js';
 export class Database{
  constructor(url,key){this.url=url.replace(/\/$/,'');this.key=key;}
@@ -7,7 +7,8 @@ export class Database{
   const headers={apikey:this.key,Authorization:`Bearer ${this.key}`,'Content-Type':'application/json'};if(prefer)headers.Prefer=prefer;
   const r=await fetch(u,{method,headers,body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
   if(!r.ok){const d=await r.json().catch(()=>({}));const e=new Error(d.message||`database_${r.status}`);e.status=r.status;throw e;}
-  return r.status===204?null:r.json();
+  // PostgREST return=minimal and ignored duplicates can return an empty 201/200.
+  const text=await r.text();return text.trim()?JSON.parse(text):null;
  }
  get(table,query={}){return this.request(table,{query});}
  post(table,body,query={},prefer='return=representation'){return this.request(table,{method:'POST',body,query,prefer});}
@@ -48,9 +49,9 @@ export class Radar{
   const unresolved=imp.rows.filter(r=>!r.verified);let text=`<b>Проверьте портфель · ${html(a.name)}</b>\nРежим: ${imp.mode==='replace'?'заменить весь выбранный счёт':'обновить только показанные позиции'}\n\n`+formatPositions(imp.rows);
   if(imp.warnings?.length)text+='\n\n'+imp.warnings.slice(0,10).map(x=>'⚠️ '+html(String(x).slice(0,250))).join('\n');
   if(unresolved.length)text+='\n\n'+unresolved.filter(r=>r.candidates?.length).slice(0,10).map(r=>html(r.name)+': '+r.candidates.map(c=>html(String(c).slice(0,100))).join('; ')).join('\n\n');
-  if(!unresolved.length){const diff=changes(a.positions,mergePositions(a.positions,imp.rows,imp.mode));text+=`\n\nДобавлено: ${diff.added.length}. Изменено: ${diff.changed.length}. Удалено: ${diff.removed.length}.`;if(diff.removed.length)text+='\nБудут удалены: '+diff.removed.slice(0,10).map(x=>html(x.name)).join(', ')+(diff.removed.length>10?' и ещё '+(diff.removed.length-10):'');}
-  else text+='\n\nНужно уточнить '+unresolved.length+' позиций. Пример: /fix 2 SBER 10 или /fix 2 crypto:bitcoin 0.15. Знак ? — количество неизвестно.';
-  const keys=[];if(!unresolved.length)keys.push([{text:'Всё верно — сохранить',callback_data:'save:'+imp.id}]);keys.push([{text:imp.mode==='partial'?'Заменить весь счёт':'Обновить только показанные',callback_data:(imp.mode==='partial'?'replace:':'partial:')+imp.id}],[{text:'Отменить загрузку',callback_data:'cancel:'+imp.id}]);
+  const diff=changes(a.positions,mergePositions(a.positions,imp.rows,imp.mode));text+=`\n\nДобавлено: ${diff.added.length}. Изменено: ${diff.changed.length}. Удалено: ${diff.removed.length}.`;if(diff.removed.length)text+='\nБудут удалены: '+diff.removed.slice(0,10).map(x=>html(x.name)).join(', ')+(diff.removed.length>10?' и ещё '+(diff.removed.length-10):'');
+  if(unresolved.length)text+='\n\nМожно сохранить все строки. У '+unresolved.length+' позиций пока нет точного соответствия в справочнике: их количество и название сохранятся, но персональные новости и котировки появятся после уточнения.\n\nИсправить перед сохранением: /fix 2 SBER 10 или /fix 2 crypto:bitcoin 0.15. Знак ? — количество неизвестно.';
+  const keys=[[{text:unresolved.length?'Сохранить все позиции с пометками':'Всё верно — сохранить',callback_data:(unresolved.length?'save_notes:':'save:')+imp.id}]];keys.push([{text:imp.mode==='partial'?'Заменить весь счёт':'Обновить только показанные',callback_data:(imp.mode==='partial'?'replace:':'partial:')+imp.id}],[{text:'Отменить загрузку',callback_data:'cancel:'+imp.id}]);
   await this.reply(job,user,text,keys,'preview');
  }
  async handleUpdate(job){
@@ -63,11 +64,11 @@ export class Radar{
    await this.telegram('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
    const [action,ref]=String(cb.data||'').split(':');
    if(action==='forget'&&ref==='yes'){await this.db.rpc('pr_forget',{p_user:id});await this.telegram('sendMessage',{chat_id:id,text:'Ваши портфели и история удалены. Рассылка остановлена.'}).catch(()=>{});return;}
-   if(!['save','partial','replace','cancel'].includes(action))return;
+   if(!['save','save_notes','partial','replace','cancel'].includes(action))return;
    const imp=(await this.db.get('pr_imports',{id:'eq.'+ref,user_id:'eq.'+id,limit:1}))[0];
    if(!imp)return this.reply(job,id,'Эта загрузка больше недоступна.');
-   if(action==='save'){
-    const r=await this.db.rpc('pr_commit',{p_import:imp.id,p_user:id});
+   if(action==='save'||action==='save_notes'){
+    const r=await this.db.rpc('pr_commit',{p_import:imp.id,p_user:id,p_allow_unresolved:action==='save_notes'});
     return this.reply(job,id,r.already_committed?'Этот портфель уже сохранён.':`Портфель сохранён: ${r.count} позиций. Ежедневный обзор — в ${user.digest_time.slice(0,5)} (${html(user.timezone)}).\n\n/brief — получить обзор сейчас. /time — изменить время. /pause — остановить рассылку.`);
    }
    if(!['uploading','preview'].includes(imp.status))return this.reply(job,id,'Загрузка уже обработана или обрабатывается.');
@@ -167,7 +168,7 @@ export class Radar{
   if(rows.length<parsed.positions.length){
    await this.db.patch('pr_jobs',{payload:job.payload,state:'pending',attempts:0,available_at:new Date().toISOString(),lease_until:null},{id:'eq.'+job.id});return 'deferred';
   }
-  imp.rows=normalizeRows(rows);imp.warnings=parsed.warnings||[];
+  imp.rows=prepareRows(rows);imp.warnings=parsed.warnings||[];
   if(parsed.observed_date&&parsed.observed_date!==new Date().toISOString().slice(0,10))imp.warnings.push('На изображении указана дата '+parsed.observed_date+'. Проверьте актуальность остатков.');
   imp.status='preview';await this.db.patch('pr_imports',{rows:imp.rows,warnings:imp.warnings,status:'preview',updated_at:new Date().toISOString()},{id:'eq.'+imp.id});await this.preview(job,job.user_id,imp);
  }
