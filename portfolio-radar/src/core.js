@@ -35,6 +35,23 @@ export function normalizeRows(rows) {
   }
   return [...map.values()];
 }
+// A broker can show blocked and ordinary holdings under the same display name.
+// Preserve conflicting observations for review; never guess that they are one lot.
+export function prepareRows(rows){
+  const groups=new Map();
+  for(const raw of rows){const r=normalizeRows([raw])[0];const g=groups.get(r.key)||[];g.push(r);groups.set(r.key,g);}
+  const result=[];
+  for(const [key,group] of groups){
+    try{result.push(...normalizeRows(group));}
+    catch(e){
+      if(!e.message.startsWith('Разное количество'))throw e;
+      const distinct=[...new Map(group.map(r=>[JSON.stringify([r.quantity,r.average_price,r.observed_value]),r])).values()];
+      for(const [i,r] of distinct.entries())result.push({...r,key:`unresolved:separate:${key}:${i+1}`,verified:false,provider:null,provider_id:null,symbol:null,isin:null,
+        issue:'Несколько отдельных строк с одним названием. Сохраняю отдельно; для точного определения нужен тикер или ISIN каждой строки.'});
+    }
+  }
+  return normalizeRows(result);
+}
 export function mergePositions(oldRows,incoming,mode='partial'){
   if(!['partial','replace'].includes(mode))throw new Error('Неверный режим обновления');
   const rows=normalizeRows(incoming), map=new Map(mode==='partial'?oldRows.map(r=>[r.key,{...r}]):[]);
@@ -61,7 +78,7 @@ export function validateNews(items,allowedSources,now=new Date()){
   return valid.slice(0,3);
 }
 export function formatPositions(rows){
-  return rows.map((r,i)=>`${i+1}. <b>${html(r.name)}</b>${r.symbol?' · '+html(r.symbol):''}\n${r.quantity==null?'Количество не видно — только новости':'Количество: '+html(r.quantity)}${r.verified?'':'\n⚠️ Инструмент не определён: '+html(r.issue||'уточните название')}`).join('\n\n');
+  return rows.map((r,i)=>`${i+1}. <b>${html(r.name)}</b>${r.symbol?' · '+html(r.symbol):''}\n${r.quantity==null?'Количество не видно':'Количество: '+html(r.quantity)}${r.observed_value!=null?' · на скриншоте: '+html(r.observed_value)+' '+html(r.currency||''):''}${r.verified?'':'\n⚠️ '+html(r.issue||'Нужен тикер или ISIN для точного определения.')}`).join('\n\n');
 }
 export function splitText(text,max=3800){
   const parts=[];let current='';
