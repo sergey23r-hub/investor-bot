@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {decimal,normalizeRows,mergePositions,validateNews,digestText,extractFile,sourceUrls,splitText,html,jsonOutput} from '../src/core.js';
-import {createHandler,timingSafe,Radar} from '../src/app.js';
+import {decimal,normalizeRows,prepareRows,mergePositions,validateNews,digestText,extractFile,sourceUrls,splitText,html,jsonOutput} from '../src/core.js';
+import {createHandler,timingSafe,Radar,Database} from '../src/app.js';
 import {Providers,extractPortfolio,extractionSchema} from '../src/providers.js';
 const asset=(key,quantity,extra={})=>({key,name:key,quantity,average_price:null,observed_value:null,verified:true,...extra});
 test('decimal keeps exact fractional crypto balances without floating-point conversion',()=>{
@@ -12,6 +12,46 @@ test('decimal keeps exact fractional crypto balances without floating-point conv
 test('overlapping screenshots describe a balance, not transactions',()=>{
  const a=asset('BTC','0.12');assert.equal(normalizeRows([a,{...a}]).length,1);
  assert.throws(()=>normalizeRows([a,{...a,quantity:'0.2'}]),/Разное количество/);
+});
+test('broker rows with identical names and different balances survive preview separately',()=>{
+ const rows=prepareRows([asset('moex:TEST','31',{observed_value:'2176.2'}),asset('moex:TEST','11',{observed_value:'0'}),asset('coin','2')]);
+ assert.equal(rows.length,3);assert.equal(new Set(rows.map(r=>r.key)).size,3);
+ assert.deepEqual(rows.slice(0,2).map(r=>r.quantity),['31','11']);
+ assert.ok(rows.slice(0,2).every(r=>!r.verified&&r.provider===null));
+ assert.equal(rows[1].observed_value,'0');assert.equal(prepareRows([asset('coin','2'),asset('coin','2')]).length,1);
+ assert.equal(mergePositions([],rows).length,3);
+});
+test('empty successful PostgREST inserts and ignored duplicates are not JSON failures',async()=>{
+ const original=globalThis.fetch;const db=new Database('https://db.example','test');
+ try{
+  for(const status of [200,201,204]){globalThis.fetch=async()=>new Response(null,{status});assert.equal(await db.post('pr_outbox',{}, {},'return=minimal'),null);}
+  globalThis.fetch=async()=>Response.json([{id:1}],{status:201});assert.deepEqual(await db.post('pr_outbox',{}),[{id:1}]);
+  globalThis.fetch=async()=>new Response('{broken',{status:200});await assert.rejects(()=>db.get('pr_cache'),SyntaxError);
+ }finally{globalThis.fetch=original;}
+});
+test('cache write outages do not invalidate a successfully retrieved instrument',async()=>{
+ const p=new Providers({}, {get:async()=>null,set:async()=>{throw new Error('cache_down');}});
+ assert.deepEqual(await p.memo('test',60,async()=>({id:'known'})),{id:'known'});
+});
+test('suspended shares still resolve, while indices and derivatives are excluded',async()=>{
+ const p=new Providers({},{});
+ p.memo=async()=>({securities:{columns:['secid','shortname','name','isin','is_traded','group'],data:[['TEST','Example','Example Corp','US0000000001',0,'stock_shares'],['INDEX','Example','Example',null,1,'stock_index']]}});
+ const r=await p.resolve({name:'Example',kind:'stock'});assert.equal(r.verified,true);assert.equal(r.provider_id,'TEST');
+});
+test('one ISIN on multiple boards does not create ambiguous securities',async()=>{
+ const p=new Providers({},{});
+ p.memo=async()=>({securities:{columns:['secid','name','isin','is_traded','group'],data:[['EX','Example','US0000000001',0,'stock_shares'],['EX-RM','Example','US0000000001',1,'stock_shares']]}});
+ assert.equal((await p.resolve({name:'Example',kind:'stock'})).provider_id,'EX-RM');
+});
+test('full company names can resolve without a visible ticker',async()=>{
+ const p=new Providers({},{});p.memo=async key=>key==='catalog:sec'?{0:{ticker:'EX',title:'EXAMPLE CORP',cik_str:123}}:{securities:{columns:[],data:[]}};
+ assert.equal((await p.resolve({name:'Example Corporation',kind:'stock'})).provider_id,'EX');
+});
+test('preview with uncertain positions offers explicit preservation with notes',async()=>{
+ const radar=new Radar({get:async()=>[{name:'Account',positions:[]}]});let preview;
+ radar.reply=async(_job,_user,text,keys)=>{preview={text,keys};};
+ await radar.preview({id:1},1,{id:'import',rows:[asset('unknown','3',{verified:false})],mode:'partial'});
+ assert.equal(preview.keys[0][0].callback_data,'save_notes:import');assert.match(preview.text,/количество и название сохранятся/);
 });
 test('partial update retains unseen positions and replaces observed quantities',()=>{
  const result=mergePositions([asset('BTC','1'),asset('SBER','20')],[asset('BTC','2')]);
