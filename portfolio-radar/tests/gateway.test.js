@@ -1,9 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,sign} from 'node:crypto';
-import {bankToken,bankRequest,handleGateway,verifyEnvelope} from '../gateway/src/portfolio-gateway.mjs';
+import {bankToken,bankRequest,handleGateway,verifyEnvelope,bankDeadline} from '../gateway/src/portfolio-gateway.mjs';
 const keys=generateKeyPairSync('ed25519'),order='pr_'+'a'.repeat(32),sub='12345678-1234-1234-1234-123456789abc';
 function envelope(method,params={},timestamp=Date.now()) {const raw=Buffer.from(JSON.stringify({method,params,timestamp,request_id:sub}));return {payload:raw.toString('base64url'),signature:sign(null,raw,keys.privateKey).toString('base64url')};}
+test('bank deadline uses whole seconds and explicit offset across date boundaries',()=>{
+ assert.equal(bankDeadline(new Date('2026-12-31T23:59:59.789Z')),'2026-12-31T23:59:59+00:00');
+ const p=bankRequest('Init',{order_id:order,subscription_id:sub,kind:'initial'},'t','s');
+ assert.match(p.RedirectDueDate,/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$/);
+ assert.ok(Date.parse(p.RedirectDueDate)>Date.now()+3500000);
+ assert.equal(p.Token,bankToken(p,'s'));
+});
 test('gateway rejects modified and expired signed requests',()=>{
  const a=envelope('Status');assert.equal(verifyEnvelope(a,keys.publicKey).method,'Status');
  assert.throws(()=>verifyEnvelope({...a,payload:Buffer.from('{}').toString('base64url')},keys.publicKey));
