@@ -5,15 +5,15 @@ import {usageRecord} from '../src/usage.js';
 import {createHandler} from '../src/app.js';
 import {digestText} from '../src/core.js';
 const id='12345678-1234-1234-1234-123456789abc';
-test('checkout invoices are recurring Stars subscriptions with one fixed amount',async()=>{
- let invoice,reply;
- const radar={db:{rpc:async name=>name==='pr_access'?{enabled:true,paid_until:null}:{id,price_stars:1234,asset_limit:20}},telegram:async(method,body)=>{assert.equal(method,'createInvoiceLink');invoice=body;return 'https://t.me/$test';},reply:async(...args)=>{reply=args;}};
- await new Billing(radar).menu({id:1},42,true);
- assert.equal(invoice.subscription_period,PERIOD);assert.equal(PERIOD,2592000);assert.equal(invoice.currency,'XTR');assert.deepEqual(invoice.prices,[{label:'Подписка на 30 дней',amount:1234}]);assert.equal(invoiceId(invoice.payload),id);assert.equal(reply[3][0][0].url,'https://t.me/$test');
+test('RUB checkout opens only after explicit weekly consent',async()=>{
+ let calls=0,reply;const radar={db:{rpc:async()=>({freemium:true,tier:'free',checkout_enabled:true}),get:async()=>[]},reply:async(...args)=>{reply=args;}};
+ const billing=new Billing(radar);billing.bank.checkout=async user=>{calls++;assert.equal(user,42);return {payment_url:'https://securepay.tinkoff.ru/test'};};
+ await billing.menu({id:1},42);assert.equal(calls,0);assert.match(reply[3][0][0].text,/290 ₽ каждые 7 дней/);
+ await billing.menu({id:2},42,true);assert.equal(calls,1);assert.equal(reply[3][0][0].url,'https://securepay.tinkoff.ru/test');
 });
 test('disabled sales cannot create an invoice or charge a customer',async()=>{
- const billing=new Billing({db:{rpc:async()=>({enabled:false})},reply:async()=>{},telegram:async()=>{assert.fail('must not contact checkout');}});
- await billing.menu({},42,true);
+ const billing=new Billing({db:{rpc:async()=>({checkout_enabled:false}),get:async()=>[]},reply:async()=>{}});
+ billing.bank.checkout=async()=>assert.fail('must not contact bank');await billing.menu({},42,true);
 });
 test('payment confirmation passes authenticated amount, buyer, recurring flag and exact expiry to transaction',async()=>{
  let args;const billing=new Billing({db:{rpc:async(name,p)=>{assert.equal(name,'pr_payment');args=p;return {duplicate:true};}},reply:async()=>assert.fail('duplicate must not deliver twice')});
@@ -21,9 +21,8 @@ test('payment confirmation passes authenticated amount, buyer, recurring flag an
  assert.equal(args.p_user,42);assert.equal(args.p_expiry,2593000);assert.equal(args.p_recurring,true);
  assert.equal(invoiceId('pr:'+id+';drop'),null);
 });
-test('failed cancellation does not mark subscription as canceled locally',async()=>{
- let changes=0;const billing=new Billing({db:{get:async table=>table==='pr_invoices'?[{id,first_charge_id:'first'}]:[{charge_id:'latest'}],patch:async()=>{changes++;}},telegram:async()=>{throw new Error('http_500');}});
- await assert.rejects(()=>billing.cancel(42));assert.equal(changes,0);
+test('cancellation is a durable server-side operation',async()=>{
+ let args;const billing=new Billing({db:{rpc:async(name,p)=>{assert.equal(name,'pr_tbank_cancel');args=p;}}});await billing.cancel(42);assert.equal(args.p_user,42);
 });
 test('pre-checkout is answered immediately without waiting for research worker or enqueue',async()=>{
  const old=globalThis.fetch;let answer,queued=false;
