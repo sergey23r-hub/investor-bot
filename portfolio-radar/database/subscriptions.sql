@@ -80,7 +80,7 @@ begin
  select max(i.asset_limit) into lim from public.pr_invoices i join public.pr_payments p on p.invoice_id=i.id where p.user_id=p_user and not p.refunded and p.expires_at>now();
  return jsonb_build_object('enabled',s.enabled,'allowed',not s.enabled or coalesce(paid>now(),false) or coalesce(trial>now(),false),
   'paid_until',paid,'trial_until',trial,'trial_days',s.trial_days,'price_stars',s.price_stars,
-  'asset_limit',case when s.enabled then coalesce(lim,s.asset_limit) else 500 end,'manual_daily',case when s.enabled then 1 else 3 end);
+  'asset_limit',case when s.enabled then coalesce(lim,s.asset_limit) else 500 end,'manual_daily',0);
 end $$;
 create function public.pr_create_invoice(p_user bigint) returns jsonb language plpgsql security invoker set search_path='' as $$
 declare s public.pr_billing_settings; i public.pr_invoices;
