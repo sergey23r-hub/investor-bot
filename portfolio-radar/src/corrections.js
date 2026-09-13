@@ -1,6 +1,14 @@
 import {jsonOutput,decimal} from './core.js';
 import {fetchJson,MODEL} from './providers.js';
 import {usageRecord} from './usage.js';
+// Common refresh requests get a local answer without spending tokens on intent detection.
+// Explicit position edits still go through the normal correction flow.
+export function isMarketRefreshRequest(text){
+ const t=String(text||'').trim();
+ if(/^\/fix(?:\s|$)/i.test(t)||/^\d+\s*[-—:=]/.test(t))return false;
+ return /(?:^|[^\p{L}])(?:новост[ьи]|новостей|котировк[аиу]|котировки|сводк[ауи]|дайджест|news|quotes?|digest|refresh)(?=$|[^\p{L}])/iu.test(t)
+  || /(?:обнови|покажи|проверь|узнай|какая|какие|текущая|текущие)\s+(?:сейчас\s+)?(?:цен[ауы]|курс[ыа]?)(?=$|[^\p{L}])/iu.test(t);
+}
 export function correctionCode(row,edit){
  const code=String(edit.code||row.symbol||row.isin||row.name).trim();
  const raw={...row,name:code,symbol:/^[A-Za-z0-9.^=-]{1,40}$/.test(code)?code:null,isin:/^[A-Z]{2}[A-Z0-9]{10}$/.test(code)?code:null,issue:null,provider_id:null,kind:edit.kind||row.kind,
