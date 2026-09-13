@@ -115,28 +115,55 @@ export function extractFile(message){
   if(p.file_size>LIMITS.bytes)throw new Error('Изображение должно быть не больше 8 МБ');
   return {file_id:p.file_id,unique_id:p.file_unique_id,mime:message.document?.mime_type??'image/jpeg'};
 }
+const shortDate=(value,withTime=false)=>{
+  const d=new Date(value);if(!Number.isFinite(+d))return 'дата не указана';
+  return d.toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',...(withTime?{hour:'2-digit',minute:'2-digit'}:{})});
+};
+const newsPeriod=n=>n?.checked_at&&n?.window_since?shortDate(n.window_since,true)+' — '+shortDate(n.checked_at,true)+' МСК':n?.window_label||'за последние 24 часа';
+const link=(url,label)=>safeUrl(url)?`<a href="${html(url)}">${html(label)}</a>`:html(label);
 export function digestText({accounts,quotes,news,market,now=new Date()}){
-  const lines=[`<b>Ваш портфель · ${now.toLocaleDateString('ru-RU',{timeZone:'Europe/Moscow'})}</b>`];
-  if(market?.items?.length)lines.push('<b>Рынок '+html(market.window_label||'за последние 24 часа')+'</b>\n'+market.items.map(n=>`${html(n.fact)}\n<a href="${html(n.url)}">Источник · ${html(n.published_at.slice(0,10))}</a>`).join('\n'));
-  else lines.push(market?.status==='ok'?'Значимых общерыночных новостей '+html(market.window_label||'за последние 24 часа')+' не найдено.':'Общерыночные новости сейчас недоступны.');
-  const seenNews=new Set();
+  const all=accounts.flatMap(a=>a.positions),assets=[...new Map(all.filter(p=>p.verified&&p.provider!=='cash').map(p=>[p.key,p])).values()];
+  const unresolved=all.filter(p=>!p.verified),checked=assets.filter(p=>news[p.key]?.status==='ok'),priced=assets.filter(p=>quotes[p.key]?.price!=null);
+  const lines=[`📊 <b>Ваш портфель · ${shortDate(now)}</b>\nКотировки: ${priced.length}/${assets.length} · Новости проверены: ${checked.length}/${assets.length}${unresolved.length?' · Уточнить: '+unresolved.length:''}`];
+  lines.push('🌍 <b>Главное на рынке</b>\n'+html(newsPeriod(market)));
+  if(market?.items?.length)for(const n of market.items)lines.push(`• ${html(n.fact)}\n${link(n.url,'Источник · '+shortDate(n.published_at))}`);
+  else lines.push(market?.status==='ok'?'Значимых общерыночных новостей за этот период не найдено.':'⚠️ Общерыночные новости сейчас недоступны.');
+  lines.push('💼 <b>Котировки и счета</b>');
   for(const account of accounts){
-    lines.push(`<b>${html(account.name)}</b> · состав обновлён ${new Date(account.updated_at).toLocaleDateString('ru-RU',{timeZone:'Europe/Moscow'})}`);
-    for(const p of account.positions){
-      if(p.provider==='cash'){lines.push(`<b>${html(p.name)}</b> · денежный остаток: ${html(p.quantity??'не указан')} ${html(p.currency??p.provider_id??'')}`);continue;}
-      const q=quotes[p.key],n=news[p.key];let block=`<b>${html(p.name)}</b>`;
-      if(q?.price!=null)block+=` · ${html(q.price)} ${html(q.currency)}${q.change_pct!=null?' ('+(Number(q.change_pct)>0?'+':'')+Number(q.change_pct).toFixed(2)+'%)':''}\nКотировка: ${html(q.as_of)} · ${html(q.basis)}${safeUrl(q.url)?'\n<a href="'+html(q.url)+'">Источник котировки</a>':''}`;
-      else block+='\nСвежая котировка недоступна.';
-      if(!p.verified){block+='\nУточните инструмент в портфеле — персональные новости пока не подбираются.';}
-      else if(n?.status==='ok'){
-        const fresh=n.items.filter(x=>!seenNews.has(x.url));
-        if(fresh.length)block+='\nНовости '+html(n.window_label||'за последние 24 часа')+':\n'+fresh.map(x=>{seenNews.add(x.url);return `${html(x.fact)}\nЗначение: ${html(x.relevance)}\n<a href="${html(x.url)}">Источник · ${html(x.published_at.slice(0,10))}</a>`;}).join('\n\n');
-        else block+='\n'+(n.items.length?'Связанная новость уже приведена выше.':'Значимых новостей '+html(n.window_label||'за последние 24 часа')+' не найдено.');
-        if(n.events?.length)block+='\nБлижайшее: '+n.events.map(e=>`${html(e.date)} — ${html(e.title)} <a href="${html(e.url)}">источник</a>`).join('; ');
-      }else block+='\nНе удалось проверить новости; это не означает отсутствие событий.';
+    lines.push(`<b>${html(account.name)}</b> · состав от ${shortDate(account.updated_at)}`);
+    for(const p of account.positions.filter(p=>p.verified)){
+      if(p.provider==='cash'){lines.push(`💵 ${html(p.name)} · ${html(p.quantity??'не указан')} ${html(p.currency??p.provider_id??'')}`);continue;}
+      const q=quotes[p.key],change=Number(q?.change_pct),arrow=q?.change_pct==null?'▫️':change>0?'🟢':change<0?'🔴':'▫️';
+      let block=`${arrow} <b>${html(p.name)}</b>${p.symbol?' · '+html(p.symbol):''}`;
+      if(q?.price!=null){
+        const price=Number(q.price).toLocaleString('ru-RU',{maximumFractionDigits:8});
+        block+=`\n${html(price)} ${html(q.currency)}${q.change_pct!=null?'  |  <b>'+(change>0?'+':'')+change.toFixed(2)+'%</b>':''}\n${link(q.url,shortDate(q.as_of,true)+' МСК · котировка')}`;
+      }else block+='\nКотировка временно недоступна';
       lines.push(block);
     }
   }
-  lines.push('Состав — по последним подтверждённым скриншотам. Крипта: изменение за 24 часа; биржевые бумаги: за торговую сессию. Это обзор событий, а не расчёт полной доходности.');
-  return splitText(lines.join('\n\n'));
+  const times=checked.map(p=>news[p.key].checked_at).filter(Boolean).sort();
+  lines.push('📰 <b>Новости ваших активов</b>\nОбщий дневной выпуск'+(times.length?' · проверено '+shortDate(times[0],true)+(times.at(-1)!==times[0]?' — '+shortDate(times.at(-1),true):'')+' МСК':'')+'\nСобытия после проверки попадут в следующий выпуск.');
+  const seen=new Set(),events=new Map();let stories=0;
+  for(const p of assets){
+    const n=news[p.key];if(n?.status!=='ok')continue;
+    for(const item of n.items||[]){
+      if(seen.has(item.url))continue;seen.add(item.url);stories++;
+      const names=assets.filter(a=>news[a.key]?.status==='ok'&&news[a.key]?.items?.some(x=>x.url===item.url)).map(a=>a.symbol||a.name);
+      lines.push(`<b>${html(names.join(' · ').slice(0,240))}</b>\n${html(newsPeriod(n))}\n• ${html(item.fact)}\n<b>Почему это важно:</b> ${html(item.relevance)}\n${link(item.url,'Источник · '+shortDate(item.published_at))}`);
+    }
+    for(const e of n.events||[])events.set(e.url+'|'+e.date,{...e,asset:p.symbol||p.name});
+  }
+  if(!stories&&checked.length)lines.push('Значимых новостей по проверенным активам за указанный период не найдено.');
+  const gaps=assets.filter(p=>news[p.key]?.status!=='ok');
+  if(gaps.length)lines.push('⚠️ Не удалось проверить новости: '+html(gaps.map(p=>p.symbol||p.name).join(', '))+'. Отсутствие данных не означает отсутствие событий.');
+  if(!assets.length)lines.push('Уточните названия инструментов через /edit — после этого появятся персональные новости.');
+  for(const e of market?.events||[])events.set(e.url+'|'+e.date,{...e,asset:'Рынок'});
+  if(events.size){lines.push('🗓 <b>Ближайшие события</b>');for(const e of [...events.values()].sort((a,b)=>a.date.localeCompare(b.date)))lines.push(`<b>${shortDate(e.date)} · ${html(e.asset)}</b>\n${html(e.title)} · ${link(e.url,'источник')}`);}
+  if(unresolved.length){
+    lines.push(`🔎 <b>Нужно уточнить · ${unresolved.length}</b>\nПозиции сохранены. Для котировок и новостей нужен точный тикер или ISIN.\n/edit — выбрать строку и исправить`);
+    for(const a of accounts){const entries=a.positions.map((p,i)=>({p,i})).filter(({p})=>!p.verified);for(let i=0;i<entries.length;i+=10)lines.push(`<b>${html(a.name)}</b>\n`+entries.slice(i,i+10).map(({p,i})=>`${i+1}. ${html(p.name)} · количество: ${html(p.quantity??'?')}`).join('\n'));}
+  }
+  lines.push('<i>Изменения: крипта — за 24 часа, бумаги — за последнюю сессию. Цены справочные, возможна задержка; доступность продажи уточняйте у брокера. Это обзор событий, а не доходность портфеля.</i>');
+  return splitText(lines.join('\n\n'),3600).map((part,i)=>i?`📊 <b>Ваш портфель · продолжение ${i+1}</b>\n\n${part}`:part);
 }
