@@ -18,7 +18,7 @@ test('explicit quantity correction invalidates stale observed value',()=>{
 test('correction after saving creates a complete review draft and preserves every other row',async()=>{
  let inserted;const oldRows=[position,{...position,key:'other',name:'Other'}];
  const db={patch:async()=>[],post:async(table,body)=>{assert.equal(table,'pr_imports');inserted=body;return [{id:'draft',...body}];}};
- const radar=new Radar(db);radar.config={openai_key:'unused'};
+ const radar=new Radar(db);radar.config={openai_key:'unused'};radar.billing.require=async()=>({allowed:true});
  radar.currentImport=async()=>null;radar.account=async()=>({id:'account',version:7,positions:oldRows});
  radar.providers={resolve:async r=>({...r,key:'new',verified:true})};
  radar.reply=async()=>{};radar.flush=async()=>{};radar.preview=async()=>{};
@@ -30,7 +30,7 @@ test('correction after saving creates a complete review draft and preserves ever
 test('ordinary text with an ambiguous row asks a question without editing the account',async()=>{
  const old=globalThis.fetch;globalThis.fetch=async()=>Response.json({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({intent:'correct',changes:[],question:'Первая или вторая строка?'})}]}]});
  try{
-  const db={patch:async()=>[]};const radar=new Radar(db);radar.config={openai_key:'test'};
+  const db={patch:async()=>[]};const radar=new Radar(db);radar.config={openai_key:'test'};radar.billing.require=async()=>({allowed:true});
   radar.currentImport=async()=>null;radar.account=async()=>({positions:[position,position]});radar.flush=async()=>{};
   const replies=[];radar.reply=async(_job,_user,text)=>replies.push(text);
   await radar.handleCorrection({id:2,payload:{}},{chat_id:1},'Example — EX');
@@ -69,7 +69,7 @@ test('concurrent flushes cannot send the same outbox row twice',async()=>{
  const radar=new Radar(db);radar.telegram=async()=>{sent++;return {message_id:1};};
  await Promise.all([radar.flush(),radar.flush()]);assert.equal(sent,1);assert.equal(state,'sent');
 });
-test('background research resumes the same response and reuses the quote',async()=>{
+test('background research resumes the same response and does not fetch quotes',async()=>{
  let starts=0,quotes=0,stored;const requests=[];
  const radar=new Radar({patch:async()=>[],post:async(_t,body)=>{stored=body;}});
  radar.providers={
@@ -80,6 +80,6 @@ test('background research resumes the same response and reuses the quote',async(
  const job={id:1,job_key:'research:test',attempts:1,payload:{asset:{key:'asset',kind:'stock'}}};
  assert.equal(await radar.handleResearch(job),'deferred');
  await radar.handleResearch(job);
- assert.equal(starts,1);assert.equal(quotes,1);assert.equal(stored.value.quote.price,10);
+ assert.equal(starts,1);assert.equal(quotes,0);assert.equal(stored.value.news.status,'ok');
  assert.deepEqual(requests,[['resp_test','GET'],['resp_test','DELETE']]);
 });
