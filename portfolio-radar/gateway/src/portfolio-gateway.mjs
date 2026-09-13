@@ -7,6 +7,8 @@ import {RUSSIAN_TRUSTED_ROOT_CA} from './russian-trusted-root.mjs';
 import {PORTFOLIO_PUBLIC_KEY} from './portfolio-public-key.mjs';
 const ORDER=/^pr_[a-f0-9]{32}$/;
 const CALLBACK='https://swlwrhkfcmsexscfsrtc.supabase.co/functions/v1/portfolio-radar/tbank-notification';
+// T-Bank expects whole seconds and an explicit numeric UTC offset.
+export function bankDeadline(date=new Date(Date.now()+3600000)){return date.toISOString().slice(0,19)+'+00:00';}
 export function bankToken(body,password){
  const pairs=Object.entries({...body,Password:password}).filter(([k,v])=>k!=='Token'&&v!==null&&v!==undefined&&typeof v!=='object').sort(([a],[b])=>a<b?-1:a>b?1:0);
  return crypto.createHash('sha256').update(pairs.map(([,v])=>String(v)).join('')).digest('hex');
@@ -26,7 +28,7 @@ export function bankRequest(method,body,terminal,password){
   if(!/^[-a-f0-9]{36}$/.test(body.subscription_id)||!['initial','renewal'].includes(body.kind))throw new Error('invalid_subscription');
   p={...p,Amount:29000,OrderId:body.order_id,Description:'Portfolius — подписка на 7 дней, 290 рублей',PayType:'O',Language:'ru',CustomerKey:'portfolius:'+body.subscription_id,
    ...(body.kind==='initial'?{Recurrent:'Y'}:{}),DATA:{OperationInitiatorType:body.kind==='initial'?'1':'R'},NotificationURL:CALLBACK,
-   SuccessURL:'https://t.me/portfolius_bot?start=payment',FailURL:'https://t.me/portfolius_bot?start=payment',RedirectDueDate:new Date(Date.now()+3600000).toISOString()};
+   SuccessURL:'https://t.me/portfolius_bot?start=payment',FailURL:'https://t.me/portfolius_bot?start=payment',RedirectDueDate:bankDeadline()};
  }else if(method==='GetState'||method==='Charge'){
   if(!/^\d{1,20}$/.test(String(body.payment_id)))throw new Error('invalid_payment');
   p.PaymentId=String(body.payment_id);
@@ -46,7 +48,8 @@ export async function handleGateway(envelope,{terminal=process.env.TBANK_TERMINA
  // Operator diagnostic only: compare ordinary Init with CC Init, never Charge.
  if(method==='ProbeInit'){
   const p=bankRequest('Init',{...params,kind:'initial'},terminal,password);
-  delete p.Recurrent;delete p.CustomerKey;p.DATA={OperationInitiatorType:'0'};p.Token=bankToken(p,password);
+  delete p.Recurrent;delete p.CustomerKey;p.DATA={OperationInitiatorType:'0'};
+  p.Token=bankToken(p,password);
   return sanitize(await request('Init',p));
  }
  if(method==='Verify'){
