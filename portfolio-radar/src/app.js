@@ -1,6 +1,8 @@
 import {LIMITS,html,normalizeRows,prepareRows,formatPositions,splitText,extractFile,digestText,mergePositions,changes,decimal,validateNews} from './core.js';
 import {Providers,extractPortfolio,fetchJson} from './providers.js';
 import {parseCorrection,correctionCode} from './corrections.js';
+import {Billing} from './billing.js';
+import {dailyResearchKey,quoteCacheKey} from './daily.js';
 export class Database{
  constructor(url,key){this.url=url.replace(/\/$/,'');this.key=key;}
  async request(path,{method='GET',body,query={},prefer}={}){
@@ -17,13 +19,17 @@ export class Database{
  rpc(name,body={}){return this.request('rpc/'+name,{method:'POST',body});}
 }
 export class Radar{
- constructor(db,env={}){this.db=db;this.env=env;}
+ constructor(db,env={}){this.db=db;this.env=env;this.billing=new Billing(this);}
  async init(){
   this.config=await this.db.rpc('pr_config');
   // Dedicated names avoid accidentally repurposing an existing Telegram bot.
   this.config.telegram_token ||= this.env.PORTFOLIO_TELEGRAM_TOKEN;
   this.config.openai_key ||= this.env.PORTFOLIO_OPENAI_KEY||this.env.OPENAI_API_KEY;
-  this.providers=new Providers(this.config,{get:async key=>(await this.db.get('pr_cache',{key:'eq.'+key,limit:1}))[0],set:async(key,value,ttl)=>this.db.post('pr_cache',{key,value,expires_at:new Date(Date.now()+ttl*1000).toISOString()},{on_conflict:'key'},'resolution=merge-duplicates,return=minimal')});
+  this.providers=new Providers(this.config,{get:async key=>(await this.db.get('pr_cache',{key:'eq.'+key,limit:1}))[0],set:async(key,value,ttl)=>this.db.post('pr_cache',{key,value,expires_at:new Date(Date.now()+ttl*1000).toISOString()},{on_conflict:'key'},'resolution=merge-duplicates,return=minimal')},record=>this.recordUsage(record));
+ }
+ async recordUsage(record,user=null){
+  if(!record)return;
+  await this.db.post('pr_usage',{...record,user_id:user},{on_conflict:'response_id'},'resolution=ignore-duplicates,return=minimal');
  }
  async telegram(method,body){
   const d=await fetchJson(`https://api.telegram.org/bot${this.config.telegram_token}/${method}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)},15000);
@@ -58,6 +64,7 @@ export class Radar{
   return this.reply(job,user.chat_id,'Выберите строку и напишите её тикер или полное название. Можно сразу сообщением: «5 — TE.PA, 2 штуки». Если количество не указано, оно сохранится. Изменения покажу для подтверждения.',keys);
  }
  async handleCorrection(job,user,text){
+  if(!await this.billing.require(job,user.chat_id))return;
   let imp=await this.currentImport(user.chat_id);
   if(imp&&imp.status!=='preview')return this.reply(job,user.chat_id,'Скриншоты ещё обрабатываются. Дождитесь списка; затем напишите уточнение.');
   if(imp?.last_edit_key===String(job.id))return this.preview(job,user.chat_id,imp);
@@ -65,7 +72,7 @@ export class Radar{
   if(!rows.length)return this.reply(job,user.chat_id,'Сначала пришлите скриншот портфеля.');
   if(text.length>3000)return this.reply(job,user.chat_id,'Разделите уточнение на сообщения до 3000 символов.');
   await this.reply(job,user.chat_id,'Проверяю уточнение…',null,'correction_start');await this.flush();
-  const parsed=job.payload.correction||await parseCorrection(text,rows,this.config.openai_key,imp?.edit_row??null);
+  const parsed=job.payload.correction||await parseCorrection(text,rows,this.config.openai_key,imp?.edit_row??null,record=>this.recordUsage(record,user.chat_id));
   job.payload.correction=parsed;await this.db.patch('pr_jobs',{payload:job.payload},{id:'eq.'+job.id});
   if(parsed.intent==='brief')return this.handleBrief(job,user);
   if(!parsed.changes.length)return this.reply(job,user.chat_id,parsed.question||'Укажите номер строки и название: «5 — TE.PA». /edit — выбрать позицию кнопкой.');
@@ -82,10 +89,11 @@ export class Radar{
   return this.preview(job,user.chat_id,imp);
  }
  async handleBrief(job,user){
+  const access=await this.billing.require(job,user.chat_id);if(!access)return;
   const all=await this.db.get('pr_accounts',{user_id:'eq.'+user.chat_id});
   if(!all.some(a=>a.positions.length))return this.reply(job,user.chat_id,'Сначала загрузите и подтвердите портфель.');
   const today=await this.db.get('pr_jobs',{user_id:'eq.'+user.chat_id,kind:'eq.digest',created_at:'gte.'+new Date(Date.now()-86400000).toISOString(),select:'id,payload'});
-  if(today.filter(x=>!x.payload.daily&&!x.payload.recovery).length>=3)return this.reply(job,user.chat_id,'Доступно 3 ручных обзора в сутки. Ежедневная сводка придёт по расписанию.');
+  if(today.filter(x=>!x.payload.daily&&!x.payload.recovery).length>=access.manual_daily)return this.reply(job,user.chat_id,'Ручных обзоров в сутки: '+access.manual_daily+'. Ежедневная сводка придёт по расписанию.');
   await this.queue('manual:'+job.id,'digest',{chat_id:user.chat_id},user.chat_id);
   return this.reply(job,user.chat_id,'Готовлю обзор по вашему портфелю. Можно продолжать уточнять позиции — новости придут отдельным сообщением.');
  }
@@ -106,11 +114,15 @@ export class Radar{
   const id=cb?.from?.id||msg?.from?.id;
   if(!Number.isSafeInteger(id)||id<=0||msg?.chat?.type!=='private'||msg.chat.id!==id)return;
   const user=await this.user(id);job.user_id=id;await this.db.patch('pr_jobs',{user_id:id},{id:'eq.'+job.id});
+  const ref=String(msg?.text||'').match(/^\/start(?:@\w+)?\s+ref_([0-9a-f]{32})$/i)?.[1]||null;
+  await this.billing.touch(id,ref);
+  if(msg.successful_payment||msg.refunded_payment)return this.billing.payment(job,id,msg);
   if(cb){
    // Callback answer is a UI acknowledgement, never a financial action.
    await this.telegram('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
    const [action,ref,rowIndex]=String(cb.data||'').split(':');
-   if(action==='forget'&&ref==='yes'){await this.db.rpc('pr_forget',{p_user:id});await this.telegram('sendMessage',{chat_id:id,text:'Ваши портфели и история удалены. Рассылка остановлена.'}).catch(()=>{});return;}
+   if(action==='billing'){if(ref==='buy')return this.billing.menu(job,id,true);if(ref==='cancel')return this.billing.cancelMenu(job,id,true);return;}
+   if(action==='forget'&&ref==='yes'){await this.billing.cancel(id);await this.db.rpc('pr_forget',{p_user:id});await this.telegram('sendMessage',{chat_id:id,text:'Ваши портфели и история удалены. Рассылка и продление подписки остановлены. Записи расчётов сохранены.'}).catch(()=>{});return;}
    if(!['save','save_notes','partial','replace','cancel','edit'].includes(action))return;
    const imp=(await this.db.get('pr_imports',{id:'eq.'+ref,user_id:'eq.'+id,limit:1}))[0];
    if(!imp)return this.reply(job,id,'Эта загрузка больше недоступна.');
@@ -144,7 +156,12 @@ export class Radar{
    return this.reply(job,id,`Скриншот ${imp.files.length+1} добавлен. Пришлите остальные скриншоты <b>этого же счёта</b>, затем /done.\n\nДругой счёт: /account Название. ФИО и номер счёта можно закрыть; оставьте названия активов и числа.`);
   }
   const text=String(msg.text||'').trim(),[command,...args]=text.split(/\s+/);const cmd=command?.split('@')[0].toLowerCase();
-  if(cmd==='/start'||cmd==='/help')return this.reply(job,id,'<b>Портфель Романова</b>\n\nПришлите скриншоты криптопортфеля, акций или облигаций. Затем /done — я распознаю позиции и покажу их для проверки.\n\n/account Название — выбрать или создать счёт\n/portfolio — сохранённые позиции\n/edit — исправить позиции, в том числе после сохранения\n/brief — новости и котировки сейчас\n/time 22:00 Europe/Moscow — время обзора\n/pause · /resume — рассылка\n/cancel — отменить загрузку\n/history — история обновлений\n/delete — удалить свои данные\n\nДля распознавания изображения передаются в OpenAI. После подтверждения мы храним позиции и историю изменений; копии скриншотов отдельно не сохраняем. ФИО и номер счёта можно закрыть.');
+  if(cmd==='/subscribe')return this.billing.menu(job,id);
+  if(cmd==='/unsubscribe')return this.billing.cancelMenu(job,id);
+  if(cmd==='/referral')return this.billing.referral(job,id);
+  if(cmd==='/terms')return this.billing.terms(job,id);
+  if(cmd==='/paysupport')return this.billing.support(job,id);
+  if(cmd==='/start'||cmd==='/help')return this.reply(job,id,'<b>Портфель Романова</b>\n\nПришлите скриншоты криптопортфеля, акций или облигаций. Затем /done — я распознаю позиции и покажу их для проверки.\n\n/account Название — выбрать или создать счёт\n/portfolio — сохранённые позиции\n/edit — исправить позиции, в том числе после сохранения\n/brief — новости и котировки сейчас\n/subscribe — подписка · /referral — приглашения\n/time 22:00 Europe/Moscow — время обзора\n/pause · /resume — рассылка\n/cancel — отменить загрузку\n/history — история обновлений\n/delete — удалить свои данные\n\nДля распознавания изображения передаются в OpenAI. После подтверждения мы храним позиции и историю изменений; копии скриншотов отдельно не сохраняем. ФИО и номер счёта можно закрыть.');
   if(cmd==='/cancel'){const imp=await this.currentImport(id);if(imp)await this.db.patch('pr_imports',{status:'cancelled',files:[]},{id:'eq.'+imp.id});return this.reply(job,id,'Загрузка отменена.');}
   if(cmd==='/done'){
    const imp=await this.currentImport(id);if(!imp)return this.reply(job,id,'Сначала пришлите скриншот.');
@@ -167,7 +184,7 @@ export class Radar{
   if(cmd==='/edit')return this.editMenu(job,user);
   if(cmd==='/fix')return this.handleCorrection(job,user,text);
   if(cmd==='/brief')return this.handleBrief(job,user);
-  if(cmd==='/pause'||cmd==='/resume'){await this.db.patch('pr_users',{subscribed:cmd==='/resume'},{chat_id:'eq.'+id});return this.reply(job,id,cmd==='/pause'?'Ежедневная рассылка остановлена.':'Ежедневная рассылка включена.');}
+  if(cmd==='/pause'||cmd==='/resume'){await this.db.patch('pr_users',{subscribed:cmd==='/resume'},{chat_id:'eq.'+id});return this.reply(job,id,cmd==='/pause'?'Ежедневная рассылка остановлена. /unsubscribe — отдельно отключить продление подписки.':'Ежедневная рассылка включена при наличии доступа к сводкам.');}
   if(cmd==='/time'){
    if(!args.length)return this.reply(job,id,`Время обзора: ${user.digest_time.slice(0,5)}, ${html(user.timezone)}.\n\nИзменить: /time 22:00 Europe/Moscow`);
    if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(args[0]))return this.reply(job,id,'Укажите время в формате 22:00.');
@@ -182,6 +199,7 @@ export class Radar{
   return this.reply(job,id,'Неизвестная команда. /edit — исправить позиции, /brief — обзор, /help — помощь.');
  }
  async handleExtract(job){
+  if(!await this.billing.require(job,job.user_id)){await this.db.patch('pr_imports',{status:'uploading'},{id:'eq.'+job.payload.import_id,status:'eq.processing'});return;}
   const imp=(await this.db.get('pr_imports',{id:'eq.'+job.payload.import_id,user_id:'eq.'+job.user_id}))[0];
   if(!imp||imp.status==='cancelled'||imp.status==='committed')return;
   if(imp.status==='preview')return this.preview(job,job.user_id,imp);
@@ -198,7 +216,7 @@ export class Radar{
     for(const f of chunk){total+=f.bytes.length;if(total>16*1024*1024)throw new Error('images_total_too_large');buffers.push(f);}
    }
    const images=buffers.map(({bytes,mime})=>{let binary='';for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode(...bytes.subarray(i,i+8192));return `data:${mime};base64,`+btoa(binary);});
-   const parsed=await extractPortfolio(images,this.config.openai_key);
+   const parsed=await extractPortfolio(images,this.config.openai_key,record=>this.recordUsage(record,job.user_id));
    if(parsed.positions.length>LIMITS.rows)throw new Error('too_many_positions');
    job.payload.parsed=parsed;job.payload.resolved=[];
    await this.db.patch('pr_jobs',{payload:job.payload,state:'pending',attempts:0,available_at:new Date().toISOString(),lease_until:null},{id:'eq.'+job.id});
@@ -214,15 +232,24 @@ export class Radar{
   if(parsed.observed_date&&parsed.observed_date!==new Date().toISOString().slice(0,10))imp.warnings.push('На изображении указана дата '+parsed.observed_date+'. Проверьте актуальность остатков.');
   imp.status='preview';await this.db.patch('pr_imports',{rows:imp.rows,warnings:imp.warnings,status:'preview',updated_at:new Date().toISOString()},{id:'eq.'+imp.id});await this.preview(job,job.user_id,imp);
  }
- async researchKey(asset){return 'research:v2:'+asset.key+':'+Math.floor(Date.now()/(6*3600000));}
+ async researchKey(asset,now=new Date()){return dailyResearchKey(asset,now);}
  async handleResearch(job){
-  const asset=job.payload.asset;let quote=job.payload.quote??null,news;
+  const asset=job.payload.asset;let news;
   job.payload.search_started_at??=new Date().toISOString();
-  if(!job.payload.quote_checked){if(asset.key!=='market')try{quote=await this.providers.quote(asset);}catch{quote={status:'unavailable',price:null};}job.payload.quote_checked=true;job.payload.quote=quote;}
   try{
-   if(Date.now()-new Date(job.payload.search_started_at)>8*60000){if(job.payload.response_id)await this.providers.newsResponse(job.payload.response_id,'CANCEL').catch(()=>{});news={status:'unavailable',items:[],events:[]};}
-   else{
-    const response=job.payload.response_id?await this.providers.newsResponse(job.payload.response_id):null;
+   if(Date.now()-new Date(job.payload.search_started_at)>8*60000){
+    if(job.payload.response_id)await this.providers.newsResponse(job.payload.response_id,'CANCEL').catch(()=>{});
+    news={status:'unavailable',items:[],events:[],checked_at:job.payload.search_started_at};
+   }else{
+    let response=null;
+    if(job.payload.response_id)response=await this.providers.newsResponse(job.payload.response_id);
+    else{
+     // Persist the intent BEFORE calling OpenAI. A lost POST response is ambiguous:
+     // do not risk paying twice for the same daily asset after a crash/timeout.
+     if(job.payload.search_request_state==='started')throw new Error('search_start_uncertain');
+     job.payload.search_request_state='started';
+     await this.db.patch('pr_jobs',{payload:job.payload},{id:'eq.'+job.id});
+    }
     news=await this.providers.news(asset,new Date(job.payload.search_started_at),{response,background:true});
     if(news.pending){
      job.payload.response_id=news.response_id;
@@ -230,32 +257,46 @@ export class Radar{
     }
    }
   }catch(e){
-   if(e.terminalResponse){if(job.payload.response_id)await this.providers.newsResponse(job.payload.response_id,'DELETE').catch(()=>{});delete job.payload.response_id;job.payload.search_restarts=(job.payload.search_restarts||0)+1;}
-   await this.db.patch('pr_jobs',{payload:job.payload},{id:'eq.'+job.id});
-   if(job.attempts<3&&(job.payload.search_restarts||0)<3)throw e;news={status:'unavailable',items:[],events:[]};
+   // Poll failures can retry the SAME background response. Never start a second
+   // paid analysis on a terminal/ambiguous result; tomorrow gets a new daily key.
+   if(job.payload.response_id&&!e.terminalResponse&&/^(network_timeout|http_)/.test(e.message)&&job.attempts<3)throw e;
+   news={status:'unavailable',items:[],events:[],checked_at:job.payload.search_started_at};
+   job.payload.search_error=String(e.message).slice(0,100);
   }
-  await this.db.post('pr_cache',{key:job.job_key,value:{quote,news},expires_at:new Date(Date.now()+6*3600000).toISOString()},{on_conflict:'key'},'resolution=merge-duplicates,return=minimal');
+  await this.db.post('pr_cache',{key:job.job_key,value:{news},expires_at:new Date(Date.now()+7*86400000).toISOString()},{on_conflict:'key'},'resolution=merge-duplicates,return=minimal');
   if(job.payload.response_id)await this.providers.newsResponse(job.payload.response_id,'DELETE').catch(()=>{});
  }
  async handleDigest(job){
   const u=(await this.db.get('pr_users',{chat_id:'eq.'+job.user_id}))[0];if(!u||(job.payload.daily&&!u.subscribed))return;
+  const access=await this.billing.access(job.user_id);if(!access.allowed)return;
   const accounts=await this.db.get('pr_accounts',{user_id:'eq.'+job.user_id});if(!accounts.some(a=>a.positions.length))return;
   const assets=[...new Map(accounts.flatMap(a=>a.positions).filter(a=>a.verified&&a.provider!=='cash').map(a=>[a.key,a])).values()];
+  if(assets.length>access.asset_limit)return this.reply(job,job.user_id,'В портфеле '+assets.length+' определённых активов; подписка включает '+access.asset_limit+'. /paysupport — расширить лимит.');
   const kinds=[...new Set(assets.map(a=>a.kind))].sort();
   const market={key:'market',name:'Рынки по направлениям: '+kinds.join(', ')+'; глобальная экономика, Россия'+(kinds.includes('crypto')?', крипторынок':''),kind:'market'};
   // Global market review is deliberately shared; no positions or account values leave through search.
   market.name='Главные события мировой экономики, российского фондового рынка и крипторынка';
-  const quotes={},news={};let marketResult,waiting=false;
+  job.payload.news_as_of??=new Date().toISOString();
+  const quotes=job.payload.digest_quotes||{},news={};let marketResult,waiting=false;
   for(const a of [market,...assets]){
-   const key=job.payload.cache_keys?.[a.key]||await this.researchKey(a);
+   const key=job.payload.cache_keys?.[a.key]||await this.researchKey(a,new Date(job.payload.news_as_of));
    job.payload.cache_keys??={};job.payload.cache_keys[a.key]=key;
    const c=(await this.db.get('pr_cache',{key:'eq.'+key,limit:1}))[0];
-   if(c&&new Date(c.expires_at)>new Date()){const n=c.value.news;const filtered={...n,items:validateNews(n.items,(n.items||[]).map(x=>x.url),new Date(),n.window_since?(Date.now()-new Date(n.window_since))/3600000:24),events:(n.events||[]).filter(e=>e.date>=new Date().toISOString().slice(0,10))};if(a.key==='market')marketResult=filtered;else{quotes[a.key]=c.value.quote;news[a.key]=filtered;}continue;}
+   if(c&&new Date(c.expires_at)>new Date()){const n=c.value.news;const filtered={...n,items:validateNews(n.items,(n.items||[]).map(x=>x.url),new Date(),n.window_since?(Date.now()-new Date(n.window_since))/3600000:24),events:(n.events||[]).filter(e=>e.date>=new Date().toISOString().slice(0,10))};if(a.key==='market')marketResult=filtered;else{news[a.key]=filtered;}continue;}
    const existing=(await this.db.get('pr_jobs',{job_key:'eq.'+key,select:'state',limit:1}))[0];
-   if(existing?.state==='failed'){news[a.key]={status:'unavailable',items:[]};continue;}
+   if(existing&&['failed','done'].includes(existing.state)){news[a.key]={status:'unavailable',items:[]};continue;}
    await this.queue(key,'research',{asset:{name:a.name,symbol:a.symbol,isin:a.isin,kind:a.kind,key:a.key,provider:a.provider,provider_id:a.provider_id,verified:a.verified,currency:a.currency}});waiting=true;
   }
   if(waiting){await this.db.patch('pr_jobs',{payload:job.payload,state:'pending',attempts:0,available_at:new Date(Date.now()+15000).toISOString(),lease_until:null},{id:'eq.'+job.id});return 'deferred';}
+  const missing=assets.filter(a=>!Object.hasOwn(quotes,a.key));
+  if(missing.length){
+   await Promise.all(missing.slice(0,4).map(async a=>{
+    try{quotes[a.key]=await this.providers.memo(quoteCacheKey(a),900,()=>this.providers.quote(a));}catch{quotes[a.key]={status:'unavailable',price:null};}
+   }));
+   job.payload.digest_quotes=quotes;
+   await this.db.patch('pr_jobs',{payload:job.payload},{id:'eq.'+job.id});
+   if(missing.length>4){await this.db.patch('pr_jobs',{state:'pending',attempts:0,available_at:new Date(Date.now()+1000).toISOString(),lease_until:null},{id:'eq.'+job.id});return 'deferred';}
+  }
   const messages=digestText({accounts,quotes,news,market:marketResult});for(const[i,text]of messages.entries())await this.reply(job,job.user_id,text,null,'digest:'+i);
  }
  async flush(){
@@ -288,6 +329,7 @@ export class Radar{
      const retry=/^(network_timeout|http_|telegram_|database_|search_incomplete)/.test(e.message)&&job.attempts<3;
      await this.db.patch('pr_jobs',{state:retry?'pending':'failed',available_at:new Date(Date.now()+job.attempts*60000).toISOString(),lease_until:null,last_error:String(e.message).slice(0,150)},{id:'eq.'+job.id});
      if(!retry&&job.user_id){
+      if(job.payload.message?.successful_payment||job.payload.message?.refunded_payment){await this.reply(job,job.user_id,'Telegram прислал информацию об оплате, но обработка задержалась. Повторно оплачивать не нужно. /paysupport — помощь.',null,'payment_error');count++;await this.flush();continue;}
       if(job.kind==='extract')await this.db.patch('pr_imports',{status:'uploading'},{id:'eq.'+job.payload.import_id,status:'eq.processing'});
       const friendly={stale_import:'Портфель уже изменился. Отмените эту загрузку и пришлите новые скриншоты.',unresolved_rows:'Сначала уточните отмеченные позиции через /fix.',import_not_ready:'Эта загрузка ещё не готова к сохранению.',positions_not_found:'На скриншоте не удалось найти позиции. Пришлите более чёткое изображение.',openai_key_missing:'Распознавание пока не подключено.'};
       await this.reply(job,job.user_id,friendly[e.message]||'Не удалось завершить обработку. Сохранённый портфель не изменился. Повторите команду; для новой загрузки — /cancel.',null,'error');
@@ -302,8 +344,8 @@ export class Radar{
   const me=await this.telegram('getMe',{});
   const current=await this.telegram('getWebhookInfo',{});const target=base.replace(/\/$/,'')+'/webhook';
   if(current.url&&current.url!==target)throw new Error('bot_already_connected_elsewhere');
-  await this.telegram('setWebhook',{url:target,secret_token:this.config.webhook_secret,allowed_updates:['message','callback_query'],max_connections:10,drop_pending_updates:false});
-  await this.telegram('setMyCommands',{commands:[{command:'start',description:'Начать и узнать возможности'},{command:'done',description:'Распознать загруженные скриншоты'},{command:'portfolio',description:'Мои позиции'},{command:'edit',description:'Исправить позицию'},{command:'brief',description:'Обзор по портфелю'},{command:'account',description:'Выбрать счёт'},{command:'time',description:'Время ежедневной сводки'},{command:'pause',description:'Остановить рассылку'},{command:'resume',description:'Включить рассылку'},{command:'cancel',description:'Отменить загрузку'},{command:'delete',description:'Удалить мои данные'}]});
+  await this.telegram('setWebhook',{url:target,secret_token:this.config.webhook_secret,allowed_updates:['message','callback_query','pre_checkout_query'],max_connections:10,drop_pending_updates:false});
+  await this.telegram('setMyCommands',{commands:[{command:'start',description:'Начать и узнать возможности'},{command:'done',description:'Распознать загруженные скриншоты'},{command:'portfolio',description:'Мои позиции'},{command:'edit',description:'Исправить позицию'},{command:'brief',description:'Обзор по портфелю'},{command:'subscribe',description:'Моя подписка'},{command:'referral',description:'Пригласить друзей'},{command:'unsubscribe',description:'Отключить продление'},{command:'paysupport',description:'Помощь с оплатой'},{command:'terms',description:'Условия подписки'},{command:'account',description:'Выбрать счёт'},{command:'time',description:'Время ежедневной сводки'},{command:'pause',description:'Остановить рассылку'},{command:'resume',description:'Включить рассылку'},{command:'cancel',description:'Отменить загрузку'},{command:'delete',description:'Удалить мои данные'}]});
   return {username:me.username,url:'https://t.me/'+me.username};
  }
 }
@@ -312,7 +354,7 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
  const db=dbOverride||new Database(env.SUPABASE_URL,env.SUPABASE_SERVICE_ROLE_KEY);
  return async req=>{
   const path=new URL(req.url).pathname.split('/').filter(Boolean).at(-1),json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
-  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.1.0',status:'running'});
+  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.2.0',status:'running'});
   if(req.method!=='POST')return json({error:'not_found'},404);
   try{
    const radar=new Radar(db,env);await radar.init();
@@ -321,6 +363,7 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
     if(Number(req.headers.get('content-length'))>100000)return json({error:'too_large'},413);
     const raw=await req.text();if(raw.length>100000)return json({error:'too_large'},413);const update=JSON.parse(raw);
     if(!Number.isSafeInteger(update.update_id))return json({error:'invalid_update'},400);
+    if(update.pre_checkout_query){await radar.billing.checkout(update.pre_checkout_query);return json({ok:true});}
     await radar.queue('update:'+update.update_id,'update',update);
     waitUntil(radar.work().catch(()=>console.error('portfolio_worker_failed')));return json({ok:true});
    }
