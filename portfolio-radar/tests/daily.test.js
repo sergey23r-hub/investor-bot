@@ -23,7 +23,7 @@ test('100 portfolios with the same asset enqueue one asset analysis and one shar
  radar.queue=async(key,kind,payload)=>{if(!jobs.has(key))jobs.set(key,{id:jobs.size+1,job_key:key,kind,payload,attempts:1,state:'pending'});};
  radar.reply=async()=>{delivered++;};
  radar.providers={news:async()=>{starts++;return {status:'ok',items:[],events:[],checked_at:new Date().toISOString()};},quote:async()=>{quotes++;return {price:1};},memo:async(_key,_ttl,fn)=>fn()};
- const digests=Array.from({length:100},(_,i)=>({id:1000+i,user_id:i+1,payload:{}}));
+ const digests=Array.from({length:100},(_,i)=>({id:1000+i,user_id:i+1,job_key:'daily:'+(i+1)+':2026-09-13',payload:{daily:true}}));
  await Promise.all(digests.map(d=>radar.handleDigest(d)));
  assert.equal(jobs.size,2);assert.equal(delivered,0);
  for(const job of jobs.values()){await radar.handleResearch(job);job.state='done';}
