@@ -1,26 +1,31 @@
-import {html,safeUrl} from './core.js';
+import {html} from './core.js';
+import {TBank} from './tbank.js';
+import {upgradeOffer} from './freemium.js';
 export const PERIOD=30*24*3600;
 export function invoiceId(payload){const m=String(payload||'').match(/^pr:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);return m?.[1]||null;}
 const date=s=>new Date(s).toLocaleDateString('ru-RU',{timeZone:'Europe/Moscow'});
 export class Billing{
- constructor(radar){this.radar=radar;this.db=radar.db;}
+ constructor(radar){this.radar=radar;this.db=radar.db;this.bank=new TBank(radar);}
  async touch(user,ref=null){await this.db.rpc('pr_customer',{p_user:user,p_ref:ref});}
  async access(user,start=false){return this.db.rpc('pr_access',{p_user:user,p_start_trial:start});}
  async require(job,user){
-  const a=await this.access(user,true);
+  const a=await this.access(user,false);
   if(a.allowed)return a;
   await this.radar.reply(job,user,'🔐 <b>Нужна подписка</b>\n\nПортфель сохранён. Для новых сводок и распознавания откройте /subscribe.\n/portfolio — посмотреть позиции · /paysupport — помощь',null,'subscription_required');
   return null;
  }
  async menu(job,user,buy=false){
-  const a=await this.access(user);
-  if(!a.enabled)return this.radar.reply(job,user,'💎 <b>Подписка Portfolius</b>\n\nСейчас бот работает в тестовом доступе. Стоимость подписки ещё не установлена.\n\nПосле запуска: ежедневные новости и котировки, календарь событий, обновление портфеля скриншотами. Оплата каждые 30 дней с возможностью отключить продление.\n/referral — ваша ссылка для приглашений.');
-  if(a.paid_until&&new Date(a.paid_until)>new Date())return this.radar.reply(job,user,`💎 <b>Подписка активна до ${date(a.paid_until)}</b>\n\nНовости и котировки до ${a.asset_limit} активов.\nАвтопродление можно отключить через /unsubscribe или в настройках Telegram. Доступ сохранится до конца оплаченного периода.\n/paysupport — вопросы по оплате`);
-  if(!buy)return this.radar.reply(job,user,`💎 <b>Portfolius · ${a.price_stars} ⭐ / 30 дней</b>\n\n• До ${a.asset_limit} активов во всех счетах\n• Ежедневные новости, котировки и календарь\n• Обновление скриншотами и исправления текстом\n\n${a.trial_until&&new Date(a.trial_until)>new Date()?'Пробный доступ до '+date(a.trial_until):a.trial_days?'Пробный доступ: '+a.trial_days+' дней с первого использования':'Пробный доступ завершён'}\n\nПодписка автоматически продлевается каждые 30 дней. Перед оплатой прочитайте /terms. Отключить продление: /unsubscribe.`,[[{text:'Продолжить к оплате',callback_data:'billing:buy'}]]);
-  const i=await this.db.rpc('pr_create_invoice',{p_user:user});
-  const url=await this.radar.telegram('createInvoiceLink',{title:'Portfolius · 30 дней',description:`Новости и котировки до ${i.asset_limit} активов. ${i.price_stars} Stars каждые 30 дней, с автопродлением. Отключение: /unsubscribe.`,payload:'pr:'+i.id,currency:'XTR',provider_token:'',subscription_period:PERIOD,prices:[{label:'Подписка на 30 дней',amount:i.price_stars}]});
-  if(!safeUrl(url)||new URL(url).hostname!=='t.me')throw new Error('invalid_invoice_url');
-  return this.radar.reply(job,user,`⭐ <b>${i.price_stars} Stars каждые 30 дней</b>\n\nTelegram покажет итоговые условия перед оплатой. Подписка начнётся после подтверждённого платежа.`,[[{text:'Оформить подписку',url}]],'invoice');
+  const a=await this.access(user),offer=upgradeOffer(a);
+  const sub=(await this.db.get('pr_tbank_subscriptions',{user_id:'eq.'+user,order:'created_at.desc',limit:1}))[0];
+  if(a.tier==='paid')return this.radar.reply(job,user,`💎 <b>Полный портфель открыт</b>\n\nДоступ до ${date(a.paid_until)}.\n${sub?.renew_enabled?'Следующее списание — 290 ₽ в конце оплаченного периода.':'Автопродление отключено. После оплаченного периода останутся три актива.'}\n\n/unsubscribe — отключить автосписания\n/paysupport — помощь с оплатой`);
+  const text=`💎 <b>Portfolius · 290 ₽ / неделю</b>\n\n• Новости и котировки всего портфеля\n• Календарь событий по вашим активам\n• Ежедневный обзор по расписанию\n\n${offer.text}\n\n<b>Условия оплаты</b>\nПервая неделя оплачивается сейчас. Оставшиеся бесплатные дни сохраняются. Далее — 290 ₽ каждые 7 дней с привязанной карты через Т‑Банк.\n\n/unsubscribe отключает следующие списания. Без оплаты остаются сводки по трём активам. /terms — полные условия.`;
+  if(!a.checkout_enabled)return this.radar.reply(job,user,text+'\n\nОплата временно недоступна. /paysupport — помощь.');
+  if(!buy)return this.radar.reply(job,user,text,[[{text:'Согласен: 290 ₽ каждые 7 дней',callback_data:'billing:buy'}]]);
+  try{
+   const order=await this.bank.checkout(user);
+   if(!order?.payment_url)return this.radar.reply(job,user,'Проверяю статус счёта. Повторно оплачивать не нужно. /subscribe — статус, /paysupport — помощь.');
+   return this.radar.reply(job,user,'💳 <b>Оплата на странице Т‑Банка</b>\n\n290 ₽ за первую неделю; затем автоматически каждые 7 дней. Оставшиеся пробные дни сохраняются. Для автопродления оплатите картой.\n\nДоступ откроется после подтверждения банка. Реквизиты карты вводятся только на странице банка. /unsubscribe — отменить продление.',[[{text:'Оплатить 290 ₽ через Т‑Банк',url:order.payment_url}]],'invoice');
+  }catch(e){return this.radar.reply(job,user,e.message==='subscription_active'?'Подписка уже активна. /subscribe — статус.':'Т‑Банк пока не подтвердил создание счёта. Доступные данные сохранены. /paysupport — помощь с подключением оплаты.');}
  }
  async checkout(query){
   let ok=false;const id=invoiceId(query.invoice_payload);
@@ -40,28 +45,19 @@ export class Billing{
   if(result.duplicate||result.refunded)return;
   return this.radar.reply(job,user,`✅ <b>${p.is_first_recurring?'Подписка оформлена':'Подписка продлена'}</b>\n\nДоступ до ${date(result.expires_at)}.\nСводки будут приходить по расписанию.\n/time — время сводки · /unsubscribe — отключить следующее продление`,null,'payment:'+p.telegram_payment_charge_id);
  }
- async cancel(user){
-  const invoices=await this.db.get('pr_invoices',{user_id:'eq.'+user,status:'eq.paid',renewal_stopped:'eq.false'});
-  for(const i of invoices){
-   const p=await this.db.get('pr_payments',{invoice_id:'eq.'+i.id,expires_at:'gt.'+new Date().toISOString(),limit:1});
-   if(!p.length)continue;
-   await this.radar.telegram('editUserStarSubscription',{user_id:user,telegram_payment_charge_id:i.first_charge_id,is_canceled:true});
-   await this.db.patch('pr_invoices',{renewal_stopped:true},{id:'eq.'+i.id,user_id:'eq.'+user});
-  }
- }
+ async cancel(user){await this.db.rpc('pr_tbank_cancel',{p_user:user});}
  async cancelMenu(job,user,confirmed=false){
   if(!confirmed)return this.radar.reply(job,user,'Отключить автоматическое продление? Доступ останется до конца оплаченного периода.',[[{text:'Отключить продление',callback_data:'billing:cancel'}]]);
   await this.cancel(user);
   return this.radar.reply(job,user,'✅ Продление отключено для действующих подписок. Доступ сохранится до конца оплаченного срока.\n/subscribe — проверить статус.');
  }
  async referral(job,user){
-  const stats=await this.db.rpc('pr_referral_stats',{p_user:user}),me=await this.radar.telegram('getMe',{});
+  const stats=await this.db.rpc('pr_rub_referral_stats',{p_user:user}),me=await this.radar.telegram('getMe',{});
   const url='https://t.me/'+me.username+'?start=ref_'+stats.code;
-  return this.radar.reply(job,user,`🤝 <b>Приглашайте друзей</b>\n\n${html(url)}\n\nПартнёру — ${stats.share_pct}% от подтверждённой оплаты приглашённого, включая продления. Первый пригласивший закрепляется навсегда.\n\n<b>Ваш кабинет</b>\nПриглашено: ${stats.invited}\nНа удержании: ${stats.pending} ⭐\nДоступно к расчёту: ${stats.available} ⭐\nВыплачено: ${stats.paid} ⭐${Number(stats.adjustment)?'\nКорректировка за возвраты: −'+stats.adjustment+' ⭐':''}\n\nНачисления учитываются в эквиваленте Stars; автоматических переводов нет. Выплаты после проверки и удержания минимум 21 день. Возвраты отменяют начисления. /paysupport — запрос выплаты.`);
+  return this.radar.reply(job,user,`🤝 <b>Приглашайте друзей</b>\n\n${html(url)}\n\nПартнёру — ${stats.share_pct}% от подтверждённой оплаты приглашённого, включая продления. Первый пригласивший закрепляется навсегда.\n\n<b>Ваш кабинет</b>\nПриглашено: ${stats.invited}\nНа удержании: ${stats.pending} ₽\nДоступно к расчёту: ${stats.available} ₽\nВыплачено: ${stats.paid} ₽${Number(stats.adjustment)?'\nКорректировка за возвраты: −'+stats.adjustment+' ₽':''}\n\nНачисления учитываются в рублях; автоматических переводов нет. Выплаты после проверки и удержания минимум 21 день. Возвраты отменяют начисления. /paysupport — запрос выплаты.`);
  }
  async terms(job,user){
-  const a=await this.access(user);
-  return this.radar.reply(job,user,`📋 <b>Условия подписки</b>\n\n${a.enabled?`${a.price_stars} Stars за 30 дней. До ${a.asset_limit} активов, одна сводка в день по расписанию. Ручное обновление новостей и котировок недоступно.`:'Продажи ещё не открыты, стоимость будет показана перед оплатой.'}\n\nОплата через Telegram Stars. Автопродление каждые 30 дней. /unsubscribe отключает следующие списания; текущий оплаченный срок сохраняется. /pause останавливает только рассылку.\n\nДоступ к котировкам и новостям зависит от источников; отсутствие данных отмечается в сводке. Это информационный обзор, без обещания доходности.\n\n/paysupport — поддержка, вопросы о возврате и выплатах. /delete удаляет портфели и историю и отключает продление; необходимые записи об оплатах, возвратах и рефералах сохраняются для расчётов.`);
+  return this.radar.reply(job,user,'📋 <b>Условия Portfolius</b>\n\n🎁 Первые 72 часа после сохранения первого портфеля — полный доступ бесплатно. Затем без подписки — новости, котировки и календарь до трёх первых активов. Все загруженные позиции сохраняются. В бесплатную сводку попадают первые три уникальных актива портфеля.\n\n💳 <b>290 ₽ каждые 7 дней через Т‑Банк</b>\nПервая неделя оплачивается при подключении. Неиспользованные пробные дни прибавляются к доступу. Следующие 290 ₽ списываются автоматически в конце оплаченного периода. Автосписания начинаются только после согласия с условиями и успешной оплаты картой.\n\n/unsubscribe отключает будущие списания; оплаченный доступ сохраняется. Если платёж уже отправлен в банк, его обработка может завершиться после отмены — /paysupport поможет с возвратом. /pause останавливает только рассылку. При неудачной оплате после окончания доступа остаются три актива.\n\nНовости и котировки обновляются по расписанию, один обзор в сутки. Ручного обновления нет. Доступность данных зависит от источников; обзор информационный и не обещает доходности.\n\n/delete удаляет портфели и отключает продление. Записи о пробном сроке, оплатах и рефералах сохраняются для расчётов и не дают начать пробный срок заново.\n/paysupport — поддержка и возвраты.');
  }
- async support(job,user){return this.radar.reply(job,user,'💬 <b>Помощь с оплатой</b>\n\nНапишите <a href="https://t.me/romanovsv">@romanovsv</a>: опишите проблему и приложите квитанцию Telegram. Здесь же можно запросить возврат или расчёт партнёрского вознаграждения.\n\n/subscribe — статус · /unsubscribe — отключить продление');}
+ async support(job,user){return this.radar.reply(job,user,'💬 <b>Помощь с оплатой</b>\n\nНапишите <a href="https://t.me/romanovsv">@romanovsv</a>: опишите проблему и приложите квитанцию Т‑Банка. Здесь же можно запросить возврат или расчёт партнёрского вознаграждения.\n\n/subscribe — статус · /unsubscribe — отключить продление');}
 }
