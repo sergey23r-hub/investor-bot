@@ -1,5 +1,6 @@
 import {jsonOutput,decimal} from './core.js';
 import {fetchJson,MODEL} from './providers.js';
+import {usageRecord} from './usage.js';
 export function correctionCode(row,edit){
  const code=String(edit.code||row.symbol||row.isin||row.name).trim();
  const raw={...row,name:code,symbol:/^[A-Za-z0-9.^=-]{1,40}$/.test(code)?code:null,isin:/^[A-Z]{2}[A-Z0-9]{10}$/.test(code)?code:null,issue:null,provider_id:null,kind:edit.kind||row.kind,
@@ -8,7 +9,7 @@ export function correctionCode(row,edit){
  if(code.startsWith('crypto:')){raw.kind='crypto';raw.name=code.slice(7);raw.symbol=null;raw.provider_id=code.slice(7);}
  return raw;
 }
-export async function parseCorrection(text,rows,key,selected=null){
+export async function parseCorrection(text,rows,key,selected=null,onUsage=async()=>{}){
  const exact=text.trim().match(/^\/fix\s+(\d+)\s+(\S+)(?:\s+([?+\d.,]+))?$/i);
  if(exact)return {intent:'correct',changes:[{row:Number(exact[1]),code:exact[2],quantity:exact[3]??null,quantity_supplied:exact[3]!==undefined,kind:null}],question:null};
  if(selected!=null&&/^(?:crypto:)?[A-Za-z0-9.^=-]{1,40}$/.test(text.trim()))return {intent:'correct',changes:[{row:selected+1,code:text.trim(),quantity:null,quantity_supplied:false,kind:null}],question:null};
@@ -20,6 +21,7 @@ export async function parseCorrection(text,rows,key,selected=null){
  input:JSON.stringify({text,selected_row:selected==null?null:selected+1,positions:rows.map((r,i)=>({row:i+1,name:r.name,symbol:r.symbol,kind:r.kind}))}),
  text:{format:{type:'json_schema',name:'portfolio_correction',strict:true,schema}}
  })},30000);
+ await onUsage(usageRecord(r,'correction'));
  const out=jsonOutput(r);
  if(out.changes.length>20||out.changes.some(c=>!Number.isInteger(c.row)||c.row<1||c.row>rows.length))throw new Error('invalid_correction');
  return out;
