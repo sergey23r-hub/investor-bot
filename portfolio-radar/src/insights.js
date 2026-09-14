@@ -14,8 +14,16 @@ export class Insights{
  async accounts(user){return this.db.get('pr_accounts',{user_id:'eq.'+user,order:'id.asc'});}
  async save(user,kind,serviceDay,snapshot){
   await this.db.post('pr_reports',{user_id:user,kind,service_day:serviceDay,snapshot},{on_conflict:'user_id,kind,service_day'},(kind==='first'?'resolution=merge-duplicates':'resolution=ignore-duplicates')+',return=minimal');
-  const report=(await this.db.get('pr_reports',{user_id:'eq.'+user,kind:'eq.'+kind,service_day:'eq.'+serviceDay,limit:1}))[0];
-  if(!report)throw new Error('report_save_failed');return report;
+  let report=(await this.db.get('pr_reports',{user_id:'eq.'+user,kind:'eq.'+kind,service_day:'eq.'+serviceDay,limit:1}))[0];
+  if(!report)throw new Error('report_save_failed');
+  // A weekly preview opened before today's daily report must include that report
+  // later. The conditional write prevents an older concurrent preview replacing it.
+  if(kind==='weekly'&&snapshot.as_of>report.snapshot.as_of){
+   await this.db.patch('pr_reports',{snapshot},{id:'eq.'+report.id,user_id:'eq.'+user,'snapshot->>as_of':'lt.'+snapshot.as_of});
+   report=(await this.db.get('pr_reports',{id:'eq.'+report.id,user_id:'eq.'+user,limit:1}))[0];
+   if(!report)throw new Error('report_save_failed');
+  }
+  return report;
  }
  async latest(user,kind='daily'){
   return (await this.db.get('pr_reports',{user_id:'eq.'+user,kind:'eq.'+kind,order:'service_day.desc',limit:1}))[0];
