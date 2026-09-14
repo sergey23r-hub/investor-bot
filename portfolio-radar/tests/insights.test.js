@@ -33,7 +33,12 @@ function fixture(){
   }else if(table==='pr_outbox'){if(!outbox.some(o=>o.dedup_key===body.dedup_key))outbox.push(body);}
   else if(table==='pr_product_events')events.push(body);
   return [];
- },patch:async()=>[]};
+ },patch:async(table,body,q={})=>{
+  if(table!=='pr_reports')return [];
+  const matching=reports.filter(r=>String(r.id)===q.id?.slice(3)&&String(r.user_id)===q.user_id?.slice(3)&&(!q['snapshot->>as_of']||r.snapshot.as_of<q['snapshot->>as_of'].slice(3)));
+  for(const r of matching)Object.assign(r,structuredClone(body));
+  return matching;
+ }};
  const radar=new Radar(db);radar.billing.access=async()=>access;radar.reply=async(_j,_u,text,keyboard)=>replies.push({text,keyboard});
  radar.providers={news:()=>assert.fail('manual research'),quote:()=>assert.fail('manual quotes')};
  return {radar,db,reports,outbox,events,replies,setAccess:a=>access=a};
@@ -172,6 +177,36 @@ test('weekly and archive navigation reads stored reports and never calls provide
  const f=fixture();f.reports.push({id,user_id:42,kind:'daily',service_day:today,snapshot:snapshot()});
  await f.radar.insights.week({id:1},42);await f.radar.insights.archive({id:2},42);
  assert.equal(f.reports.filter(r=>r.kind==='weekly').length,1);assert.equal(f.outbox.length,1);assert.match(f.replies.at(-1).text,/Архив/);
+});
+
+test('a weekly preview includes a later daily release and cannot regress to an older preview',async()=>{
+ const f=fixture(),yesterday=new Date(+now-86400000),earlier=snapshot();earlier.as_of=yesterday.toISOString();
+ f.reports.push({id,user_id:42,kind:'daily',service_day:newsDay(yesterday),snapshot:earlier});
+ await f.radar.insights.week({id:10},42);
+ const before=structuredClone(f.reports.find(r=>r.kind==='weekly'));
+ assert.equal(before.snapshot.days_count,1);
+ const later=snapshot();later.quotes.a0.price=120;later.news.a0.items[0].fact='Later daily announcement';
+ f.reports.push({id:crypto.randomUUID(),user_id:42,kind:'daily',service_day:today,snapshot:later});
+ await f.radar.insights.week({id:11},42,true);
+ const after=f.reports.find(r=>r.kind==='weekly');
+ assert.equal(after.id,before.id);assert.equal(after.snapshot.days_count,2);
+ assert.ok(after.snapshot.news.a0.items.some(n=>n.fact==='Later daily announcement'));
+ await f.radar.insights.save(42,'weekly',today,before.snapshot);
+ assert.equal(after.snapshot.days_count,2);
+ const delivered=await f.radar.insights.deliveryBody(f.outbox.at(-1));assert.match(delivered.text,/2 из 7/);
+});
+
+test('an empty first view explains the wait rather than presenting an unresearched daily conclusion',()=>{
+ const initial={accounts,as_of:now.toISOString(),total_assets:20,quotes:{},news:{}};
+ for(const access of [paid,free]){
+  const view=filterSnapshot(initial,access,accounts),text=reportPages({kind:'first'},view,'summary',access).join('\n');
+  assert.match(text,/Ожидаем первый рыночный выпуск/);assert.match(text,/\/time/);
+  assert.doesNotMatch(text,/главное за день|подтверждённых событий.*нет|Движения цен/);
+  assert.match(text,new RegExp('Активов для обзора: '+(access.tier==='free'?3:20)));
+ }
+ const daily=reportPages({kind:'daily'},initial,'summary',paid).join('\n');
+ assert.doesNotMatch(daily,/Ожидаем первый/);assert.match(daily,/пробелы в данных/);
+ const cached=reportPages({kind:'first'},snapshot(),'summary',paid).join('\n');assert.match(cached,/сохранённые данные/);assert.doesNotMatch(cached,/Ожидаем первый/);
 });
 
 test('the owner metrics endpoint is not exposed to another Telegram user',async()=>{
