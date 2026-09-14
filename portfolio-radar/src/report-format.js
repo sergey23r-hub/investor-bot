@@ -126,12 +126,13 @@ export function summaryText(snapshot,access,{weekly=false,initial=false}={}){
  if(initial&&!newsCount&&!priced)return [
   '<b>💼 Portfolius · ваш портфель</b>',
   `Сохранённых счетов: ${snapshot.accounts?.length||0}\nАктивов для обзора: ${assets.length}`,
-  `<b>${snapshot.has_prior_daily?'Рыночные данные пока недоступны':'Ожидаем первый рыночный выпуск'}</b>\nСостав портфеля сохранён. Новости и котировки появятся с плановой сводкой. /time — проверить время доставки.`,
+  snapshot.initial_pending?'<b>Готовим первый обзор</b>\nСостав портфеля сохранён. Собираем котировки и новости по вашим активам — обзор придёт отдельным сообщением.':snapshot.initial_ready?'<b>Первый обзор подготовлен с пробелами</b>\nИсточники пока не вернули котировки и новости. Состав портфеля доступен; следующая проверка пройдёт по расписанию.':`<b>${snapshot.has_prior_daily?'Рыночные данные пока недоступны':'Ожидаем первый рыночный выпуск'}</b>\nСостав портфеля сохранён. Новости и котировки появятся с плановой сводкой. /time — проверить время доставки.`,
   'Кнопка «Активы» покажет сохранённые позиции. Структура доступна, если в портфеле достаточно данных для оценки.',
   offer.text
  ].filter(Boolean).join('\n\n');
  const lines=[`<b>${weekly?'📅 Portfolius · итоги недели':initial?'💼 Portfolius · сохранённые данные':'📊 Portfolius · главное за день'}</b>\n${weekly?dateLabel(snapshot.period_from)+' — ':''}${dateLabel(snapshot.as_of)}`];
  if(weekly)lines.push(`Сохранённых дневных выпусков за период: ${snapshot.days_count||1} из 7. Изменения цен считаются между доступными снимками.`);
+ if(initial&&snapshot.initial_pending)lines.push('⏳ Первый обзор дополняется. Готовый выпуск придёт отдельным сообщением.');
  if(items.length)lines.push('<b>Главное по вашим активам</b>\n'+items.slice(0,2).map(n=>`• <b>${html(n.symbol||n.asset)}</b>: ${html(clip(n.fact,240))}`).join('\n'));
  else lines.push('Новых подтверждённых событий по проверенным активам в этом выпуске нет.');
  const movers=assets.map(p=>({p,change:finite(weekly?snapshot.week_change?.[p.key]:snapshot.quotes?.[p.key]?.change_pct)})).sort((a,b)=>Math.abs(b.change||0)-Math.abs(a.change||0)).slice(0,3);
@@ -174,7 +175,7 @@ export function detailText(snapshot,section,access){
 export function reportPages(report,snapshot,section,access){
  if(snapshot.empty_portfolio)return ['<b>💼 Portfolius · ваш портфель</b>\n\nВ сохранённых счетах нет позиций. Пришлите скриншоты, чтобы добавить активы.'];
  const text=section==='summary'?summaryText(snapshot,access,{weekly:report.kind==='weekly',initial:report.kind==='first'}):detailText(snapshot,section,access);
- const reused=snapshot.reused_market_as_of?`<i>Состав от ${dateLabel(snapshot.as_of)}. Часть рыночных данных — из сводки от ${dateLabel(snapshot.reused_market_as_of)}.</i>\n\n`:'';
+ const reused=snapshot.reused_market_as_of?`<i>Состав от ${dateLabel(snapshot.as_of)}. Часть рыночных данных — по состоянию на ${dateLabel(snapshot.reused_market_as_of)}.</i>\n\n`:'';
  return splitText(reused+text,3200);
 }
 export function reportKeyboard(id,section,access,page=0,pages=1){
