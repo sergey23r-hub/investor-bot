@@ -6,7 +6,7 @@ import {BOT_NAME,BOT_DESCRIPTION,BOT_SHORT_DESCRIPTION} from '../src/onboarding.
 function setup(){
  const replies=[],queued=[],touches=[];
  const user={chat_id:42,current_account:'account',digest_time:'22:00:00',timezone:'Europe/Moscow'};
- const radar=new Radar({patch:async()=>[]});
+ const radar=new Radar({patch:async()=>[],post:async()=>[],get:async()=>[]});
  radar.user=async()=>user;
  radar.billing.touch=async(...args)=>touches.push(args);
  radar.billing.access=async(_user,start)=>{assert.notEqual(start,true,'opening onboarding must not start the trial');return {tier:'pending',freemium:true};};
