@@ -133,6 +133,7 @@ export class Radar{
    // Callback answer is a UI acknowledgement, never a financial action.
    await this.telegram('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
    const [action,ref,rowIndex,pageText]=String(cb.data||'').split(':');
+   if(action!=='insight'||ref!=='ask')await this.insights.clearQuestion(id);
    if(action==='report')return this.insights.open(job,id,ref,rowIndex,Number(pageText||0));
    if(action==='insight'){
     if(ref==='report')return this.insights.open(job,id);
@@ -200,7 +201,7 @@ export class Radar{
   if(cmd==='/referral')return this.billing.referral(job,id);
   if(cmd==='/terms')return this.billing.terms(job,id);
   if(cmd==='/paysupport')return this.billing.support(job,id);
-  if(cmd==='/start'||/^(?:начать|старт|start|🚀 начать)$/iu.test(text)){await this.insights.event(id,'start',job.id);return this.showScreen(job,user,'home');}
+  if(cmd==='/start'||/^(?:начать|старт|start|🚀 начать)$/iu.test(text)){await this.insights.clearQuestion(id);await this.insights.event(id,'start',job.id);return this.showScreen(job,user,'home');}
   if(cmd==='/help')return this.showScreen(job,user,'help');
   if(cmd==='/cancel'){await this.insights.clearQuestion(id);const imp=await this.currentImport(id);if(imp)await this.db.patch('pr_imports',{status:'cancelled',files:[]},{id:'eq.'+imp.id});return this.reply(job,id,'Загрузка отменена.');}
   if(cmd==='/done')return this.beginExtraction(job,user);
@@ -412,7 +413,7 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
  const db=dbOverride||new Database(env.SUPABASE_URL,env.SUPABASE_SERVICE_ROLE_KEY);
  return async req=>{
   const path=new URL(req.url).pathname.split('/').filter(Boolean).at(-1),json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
-  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.4.1',status:'running'});
+  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.4.2',status:'running'});
   if(req.method!=='POST')return json({error:'not_found'},404);
   try{
    const radar=new Radar(db,env);await radar.init();
