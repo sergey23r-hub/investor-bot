@@ -42,6 +42,21 @@ test('every welcome-screen button has a working private-chat route',async()=>{
  assert.equal(s.queued.length,0,'example is static; no news or quotes requested');
 });
 
+test('leaving question mode via navigation or plain start routes later text to portfolio correction',async()=>{
+ for(const navigation of ['ui:upload','insight:report','billing:upgrade','Start']){
+  const s=setup();let pending=true,corrected=0;
+  s.radar.insights.clearQuestion=async()=>{pending=false;};s.radar.insights.pendingQuestion=async()=>pending;
+  s.radar.insights.open=async()=>{};s.radar.billing.menu=async()=>{};
+  s.radar.insights.ask=async()=>assert.fail('correction must not consume an AI question');
+  s.radar.handleCorrection=async()=>{corrected++;};
+  if(navigation==='Start')await s.send(navigation);else await s.click(navigation);
+  await s.send('1 — EX, 5 штук');assert.equal(corrected,1);
+ }
+ const s=setup();let cleared=0,opened=0;
+ s.radar.insights.clearQuestion=async()=>{cleared++;};s.radar.insights.ask=async()=>{opened++;};
+ await s.click('insight:ask');assert.equal(opened,1);assert.equal(cleared,0);
+});
+
 test('recognition button processes the matching upload and rejects stale buttons',async()=>{
  const s=setup();let imp={id:'current',files:[{file_id:'file'}],status:'uploading'};
  s.radar.currentImport=async()=>imp;
