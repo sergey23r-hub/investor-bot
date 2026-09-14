@@ -18,7 +18,7 @@ const snapshot=()=>({accounts,as_of:now.toISOString(),total_assets:20,
 
 function fixture(){
  const reports=[],outbox=[],events=[],replies=[];let access=paid;
- const db={get:async(table,q={})=>{
+ const db={rpc:async name=>{assert.equal(name,'pr_initial_begin');return {started:false,state:'ready'};},get:async(table,q={})=>{
   if(table==='pr_accounts')return accounts;
   if(table==='pr_reports'){
    let result=reports.filter(r=>['id','user_id','kind','service_day'].every(k=>!q[k]||(q[k].startsWith('eq.')?String(r[k])===q[k].slice(3):q[k].startsWith('gte.')?r[k]>=q[k].slice(4):q[k].startsWith('lt.')?r[k]<q[k].slice(3):true)));
@@ -141,7 +141,7 @@ test('screenshot save builds a useful passport from existing cache without start
  const get=f.db.get;f.db.get=async(table,q)=>table==='pr_cache'?[cache]:get(table,q);
  f.radar.queue=async()=>assert.fail('must not schedule manual market work');
  await f.radar.insights.afterSave({id:7},{chat_id:42,digest_time:'22:00:00',timezone:'Europe/Moscow'});
- assert.equal(f.reports.length,1);assert.match(f.replies[0].text,/Портфель сохранён/);assert.match(f.replies[0].text,/уже есть готовые данные/);
+ assert.equal(f.reports.length,1);assert.match(f.replies[0].text,/Портфель сохранён/);assert.match(f.replies[0].text,/Готовые данные уже доступны/);
  assert.ok(f.reports[0].snapshot.news.a0);assert.equal(f.events[0].event,'saved');
 });
 
@@ -223,7 +223,7 @@ test('extended shared research requires sourced profile and primary announcement
 });
 
 test('an existing portfolio opens from cache before the first new daily report without restarting trial',async()=>{
- const f=fixture();f.db.rpc=async()=>assert.fail('unexpected RPC / trial reset');
+ const f=fixture();f.db.rpc=async name=>{assert.equal(name,'pr_initial_begin');return {started:true,state:'queued'};};
  await f.radar.insights.open({id:9},42);
  assert.equal(f.reports[0].kind,'first');assert.equal(f.outbox.length,1);
  assert.equal(f.events.some(e=>e.event==='saved'),false);
