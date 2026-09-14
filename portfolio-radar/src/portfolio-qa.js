@@ -3,11 +3,14 @@ import {jsonOutput,html,safeUrl} from './core.js';
 import {usageRecord} from './usage.js';
 import {stories,structureText,calendarText} from './report-format.js';
 import {portfolioAssets} from './freemium.js';
+import {newsIdentity} from './daily.js';
 
 export async function answerPortfolioQuestion(question,snapshot,key,onUsage=async()=>{}){
  if(!key)throw new Error('openai_key_missing');
  const sourceItems=stories(snapshot),sources=[...new Set([...sourceItems.map(x=>x.url),...Object.values(snapshot.facts||{}).flatMap(x=>(x?.events||[]).map(e=>e.url)),...Object.values(snapshot.news||{}).flatMap(x=>(x?.events||[]).map(e=>e.url))].map(safeUrl).filter(Boolean))].slice(0,60);
- const context={as_of:snapshot.as_of,assets:portfolioAssets(snapshot.accounts||[]).slice(0,100).map(p=>({name:p.name,symbol:p.symbol,kind:p.kind,quote:snapshot.quotes?.[p.key]||null})),
+ const allAssets=portfolioAssets(snapshot.accounts||[]);
+ const context={as_of:snapshot.as_of,reused_market_as_of:snapshot.reused_market_as_of||null,total_asset_count:allAssets.length,assets:allAssets.slice(0,100).map(p=>({name:p.name,symbol:p.symbol,kind:p.kind,quote:snapshot.quotes?.[p.key]||null,
+  holdings:(snapshot.accounts||[]).flatMap(a=>a.positions.filter(h=>h.verified&&newsIdentity(h)===p.key).map(h=>({account:a.name,quantity:h.quantity??null,currency:h.currency||null}))) })),
   structure:structureText(snapshot,{tier:'paid'}),calendar:calendarText(snapshot,{tier:'paid'}),
   news:sourceItems.slice(0,25).map(n=>({asset:n.asset,fact:n.fact,relevance:n.relevance,source_id:sources.indexOf(n.url)})),sources};
  // Bounded context, output and request count; no search tool or provider refresh.
