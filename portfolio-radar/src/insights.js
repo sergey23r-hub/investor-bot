@@ -28,6 +28,12 @@ export class Insights{
  async latest(user,kind='daily'){
   return (await this.db.get('pr_reports',{user_id:'eq.'+user,kind:'eq.'+kind,order:'service_day.desc',limit:1}))[0];
  }
+ async current(user){
+  const candidates=await Promise.all([this.latest(user),this.latest(user,'first')]);
+  const time=r=>Date.parse(r?.snapshot?.as_of||r?.created_at||r?.service_day)||0;
+  const portfolioTime=r=>Math.max(0,...(r?.snapshot?.accounts||[]).map(a=>Date.parse(a.updated_at)||0));
+  return candidates.filter(Boolean).sort((a,b)=>portfolioTime(b)-portfolioTime(a)||time(b)-time(a))[0]||null;
+ }
  async readable(user,reportId,access){
   if(!validId(reportId))return null;
   const r=(await this.db.get('pr_reports',{id:'eq.'+reportId,user_id:'eq.'+user,limit:1}))[0];
@@ -43,7 +49,8 @@ export class Insights{
   const current=access.tier==='free'?await this.accounts(user):null;
   const snapshot=filterSnapshot(report.snapshot,access,current),pages=reportPages(report,snapshot,section,access);
   if(!Number.isInteger(page)||page<0||page>=pages.length)return null;
-  return {chat_id:user,text:pages[page],parse_mode:'HTML',link_preview_options:{is_disabled:true},reply_markup:{inline_keyboard:reportKeyboard(report.id,section,access,page,pages.length)}};
+  const keyboard=snapshot.empty_portfolio?[[{text:'📸 Добавить позиции',callback_data:'ui:upload'},{text:'Главный экран',callback_data:'ui:home'}]]:reportKeyboard(report.id,section,access,page,pages.length);
+  return {chat_id:user,text:pages[page],parse_mode:'HTML',link_preview_options:{is_disabled:true},reply_markup:{inline_keyboard:keyboard}};
  }
  async sendReport(job,user,report,section='summary',page=0,{automatic=false}={}){
   const access=await this.radar.billing.access(user),body=await this.body(user,report,section,page,access);
@@ -53,7 +60,7 @@ export class Insights{
  async open(job,user,section='summary',id=null,page=0){
   if(!reportSections.has(section))return;
   const access=await this.radar.billing.access(user);
-  const report=id?await this.readable(user,id,access):await this.latest(user)||await this.latest(user,'first')||await this.afterSave(job,{chat_id:user},{announce:false});
+  const report=id?await this.readable(user,id,access):await this.current(user)||await this.afterSave(job,{chat_id:user},{announce:false});
   if(!report)return this.radar.reply(job,user,'Этот выпуск недоступен. /report — последний готовый обзор. Если портфель ещё не добавлен, пришлите его скриншоты. Архив прошлых выпусков открыт в подписке.',[[{text:'📸 Добавить портфель',callback_data:'ui:upload'},{text:'💎 Подписка',callback_data:'billing:upgrade'}]]);
   await this.event(user,'report_open',job.id+':'+report.id+':'+section);
   return this.sendReport(job,user,report,section,page);
@@ -71,17 +78,28 @@ export class Insights{
  }
  async afterSave(job,user,{announce=true}={}){
   const accounts=await this.accounts(user.chat_id),access=await this.radar.billing.access(user.chat_id),view=entitledPortfolio(accounts,access),now=new Date();
-  if(!accounts.some(a=>a.positions?.length))return null;
+  if(!accounts.some(a=>a.positions?.length)){
+   if(!announce)return null;
+   await this.save(user.chat_id,'first',newsDay(now),{accounts,quotes:{},news:{},facts:{},as_of:now.toISOString(),total_assets:0,hidden:0,empty_portfolio:true});
+   await this.event(user.chat_id,'saved',job.id);
+   return this.radar.reply(job,user.chat_id,'✅ <b>Портфель обновлён</b>\n\nВ сохранённых счетах больше нет позиций. Пришлите скриншоты, когда захотите добавить активы.',[[{text:'📸 Добавить позиции',callback_data:'ui:upload'}]],'passport');
+  }
+  const previous=await this.latest(user.chat_id),age=+now-Date.parse(previous?.snapshot?.as_of);
+  const saved=age>=0&&age<=7*86400000?previous.snapshot:null;let reused=false;
+  const fallback=value=>{if(value!==undefined&&value!==null)reused=true;return value;};
   const assets=[{key:'market'},...view.assets],keys=assets.flatMap(a=>[dailyResearchKey(a,now),...(a.key==='market'?[]:[quoteCacheKey(a,now),quoteCacheKey(a,new Date(+now-15*60000))])]);
   const cache=[];
   for(let i=0;i<keys.length;i+=50)cache.push(...await this.db.get('pr_cache',{key:'in.('+keys.slice(i,i+50).map(k=>'"'+k.replaceAll('"','\\"')+'"').join(',')+')'}));
   const byKey=new Map(cache.filter(c=>Date.parse(c.expires_at)>+now).map(c=>[c.key,c.value])),quotes={},news={},facts={};
   for(const asset of view.assets){
-   const value=byKey.get(dailyResearchKey(asset,now));if(value?.news)news[asset.key]=value.news;if(value)facts[asset.key]={...(value.facts||{}),sector:value.facts?.sector||value.news?.profile?.sector||null,issuer_name:value.facts?.issuer_name||value.news?.profile?.issuer_name||null,profile_source:value.news?.profile?.url||null};
-   const q=byKey.get(quoteCacheKey(asset,now))||byKey.get(quoteCacheKey(asset,new Date(+now-15*60000)));if(q)quotes[asset.key]=q;
+   const value=byKey.get(dailyResearchKey(asset,now)),n=value?.news||fallback(saved?.news?.[asset.key]),f=value?.facts||fallback(saved?.facts?.[asset.key]);
+   if(n)news[asset.key]=n;if(n||f)facts[asset.key]={...(f||{}),sector:f?.sector||n?.profile?.sector||null,issuer_name:f?.issuer_name||n?.profile?.issuer_name||null,profile_source:f?.profile_source||n?.profile?.url||null};
+   const cachedQuote=byKey.get(quoteCacheKey(asset,now))||byKey.get(quoteCacheKey(asset,new Date(+now-15*60000))),oldQuote=saved?.quotes?.[asset.key],quoteAge=+now-Date.parse(oldQuote?.as_of);
+   const q=cachedQuote||(oldQuote?.status==='ok'&&quoteAge>=-86400000&&quoteAge<=7*86400000?fallback(oldQuote):null);if(q)quotes[asset.key]=q;
   }
   const market=byKey.get(dailyResearchKey({key:'market'},now));
-  const snapshot={accounts:view.accounts,quotes,news,facts,market:market?.news,fx:market?.facts?.fx,as_of:now.toISOString(),total_assets:view.total,hidden:view.hidden};
+  const marketNews=market?.news||fallback(saved?.market),fx=market?.facts?.fx||fallback(saved?.fx);
+  const snapshot={accounts:view.accounts,quotes,news,facts,market:marketNews,fx,as_of:now.toISOString(),total_assets:view.total,hidden:view.hidden,has_prior_daily:!!previous,...(reused?{reused_market_as_of:saved.as_of}:{})};
   const report=await this.save(user.chat_id,'first',newsDay(now),snapshot);
   if(!announce)return report;
   const allPositions=accounts.flatMap(a=>a.positions),unresolved=allPositions.filter(p=>!p.verified).length,offer=upgradeOffer(access,{hidden:view.hidden});
@@ -107,8 +125,8 @@ export class Insights{
  async ask(job,user,question=''){
   const access=await this.radar.billing.access(user);
   if(!fullAccess(access))return this.radar.reply(job,user,'💬 <b>Вопросы по портфелю</b>\n\nВ подписке — до трёх запросов в день по данным готового выпуска. /learn — бесплатная справка по терминам.',[[{text:'💎 Открыть вопросы',callback_data:'billing:upgrade'}]]);
-  const report=await this.latest(user)||await this.latest(user,'first');
-  if(!report)return this.radar.reply(job,user,'Сначала сохраните портфель. Вопросы будут доступны по его готовым данным.');
+  const report=await this.current(user)||await this.afterSave(job,{chat_id:user},{announce:false});
+  if(!report||report.snapshot.empty_portfolio)return this.radar.reply(job,user,'Сначала сохраните портфель с позициями. Вопросы будут доступны по его готовым данным.');
   if(!question){
    await this.db.post('pr_ui_sessions',{user_id:user,mode:'ask',expires_at:new Date(Date.now()+5*60000).toISOString()},{on_conflict:'user_id'},'resolution=merge-duplicates,return=minimal');
    return this.radar.reply(job,user,'💬 <b>Что хотите узнать?</b>\n\nНапример: «Что означает ближайшая оферта?» или «Где в портфеле самая высокая концентрация?»\n\nНапишите вопрос следующим сообщением либо используйте /ask Вопрос. До 3 запросов в день, сброс в 00:00 МСК. Ответ строится ИИ по сохранённому выпуску; данные по вашему вопросу передаются в OpenAI.\n\n/cancel — выйти из режима вопроса.');
