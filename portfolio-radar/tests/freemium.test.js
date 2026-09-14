@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {entitledPortfolio,upgradeOffer} from '../src/freemium.js';
+import {summaryText,filterSnapshot,reportKeyboard} from '../src/report-format.js';
 import {Radar} from '../src/app.js';
 const positions=Array.from({length:20},(_,i)=>({key:'asset'+i,name:'ASSET_'+i,symbol:'S'+i,provider:'yahoo',provider_id:'S'+i,kind:'stock',verified:true}));
 const accounts=[{id:'a',name:'Main',positions,updated_at:new Date().toISOString()}];
@@ -29,8 +30,8 @@ test('downgrade at delivery hides other quotes, news and events even when all 20
  const now=new Date().toISOString();
  const radar=new Radar({get:async table=>table==='pr_users'?[{subscribed:true}]:table==='pr_accounts'?accounts:table==='pr_cache'?[{expires_at:'2100-01-01',value:{news:{status:'ok',items:[],events:[]}}}]:[],patch:async()=>[]});
  radar.billing.access=async()=>++checks===1?paid:free;
- radar.reply=async(_j,_u,text,k)=>replies.push({text,k});
+ radar.insights.daily=async(_job,_user,all,view,quotes,news,market)=>{const snapshot=filterSnapshot({accounts:view.accounts,quotes,news,market,as_of:now,total_assets:20},free,all);replies.push({text:summaryText(snapshot,free),k:reportKeyboard('id','summary',free)});};
  const quotes=Object.fromEntries(positions.map(p=>[p.key,{price:1,currency:'RUB',as_of:now,url:'https://example.com'}]));
  await radar.handleDigest({id:1,user_id:42,job_key:'daily:42:2026-09-13',payload:{daily:true,digest_quotes:quotes}});
- const text=replies.map(x=>x.text).join('');assert.match(text,/ASSET_2/);assert.doesNotMatch(text,/ASSET_(?:[3-9]|1\d)/);assert.match(text,/Ещё 17/);assert.equal(replies.at(-1).k[0][0].callback_data,'billing:upgrade');
+ const text=replies.map(x=>x.text).join('');assert.match(text,/ASSET_2/);assert.doesNotMatch(text,/ASSET_(?:[3-9]|1\d)/);assert.match(text,/Ещё 17/);assert.equal(replies.at(-1).k.at(-1)[0].callback_data,'billing:upgrade');
 });
