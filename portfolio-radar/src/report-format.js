@@ -119,8 +119,18 @@ export function calendarText(snapshot,access,now=new Date()){
  return lines.join('\n\n');
 }
 
-export function summaryText(snapshot,access,{weekly=false}={}){
- const assets=portfolioAssets(snapshot.accounts||[]),items=stories(snapshot,{fresh:!weekly}),lines=[`<b>${weekly?'📅 Portfolius · итоги недели':'📊 Portfolius · главное за день'}</b>\n${weekly?dateLabel(snapshot.period_from)+' — ':''}${dateLabel(snapshot.as_of)}`];
+export function summaryText(snapshot,access,{weekly=false,initial=false}={}){
+ const assets=portfolioAssets(snapshot.accounts||[]),items=stories(snapshot,{fresh:!weekly});
+ const newsCount=assets.filter(p=>snapshot.news?.[p.key]?.status==='ok').length,priced=assets.filter(p=>finite(snapshot.quotes?.[p.key]?.price)!==null).length;
+ const offer=upgradeOffer(access,{hidden:snapshot.hidden});
+ if(initial&&!newsCount&&!priced)return [
+  '<b>💼 Portfolius · ваш портфель</b>',
+  `Сохранённых счетов: ${snapshot.accounts?.length||0}\nАктивов для обзора: ${assets.length}`,
+  '<b>Ожидаем первый рыночный выпуск</b>\nСостав портфеля сохранён. Новости и котировки появятся с плановой сводкой. /time — проверить время доставки.',
+  'Кнопка «Активы» покажет сохранённые позиции. Структура доступна, если в портфеле достаточно данных для оценки.',
+  offer.text
+ ].filter(Boolean).join('\n\n');
+ const lines=[`<b>${weekly?'📅 Portfolius · итоги недели':initial?'💼 Portfolius · сохранённые данные':'📊 Portfolius · главное за день'}</b>\n${weekly?dateLabel(snapshot.period_from)+' — ':''}${dateLabel(snapshot.as_of)}`];
  if(weekly)lines.push(`Сохранённых дневных выпусков за период: ${snapshot.days_count||1} из 7. Изменения цен считаются между доступными снимками.`);
  if(items.length)lines.push('<b>Главное по вашим активам</b>\n'+items.slice(0,2).map(n=>`• <b>${html(n.symbol||n.asset)}</b>: ${html(clip(n.fact,240))}`).join('\n'));
  else lines.push('Новых подтверждённых событий по проверенным активам в этом выпуске нет.');
@@ -129,11 +139,10 @@ export function summaryText(snapshot,access,{weekly=false}={}){
  const events=calendarItems(snapshot,access,new Date(snapshot.as_of));
  if(events.length)lines.push('<b>Ближайшее событие</b>\n'+dateLabel(events[0].date)+' · '+html(events[0].asset)+' · '+html(clip(events[0].title,140)));
  if(snapshot.market?.items?.length)lines.push('<b>Рыночный фон</b>\n'+html(clip(snapshot.market.items[0].fact,230)));
- const newsCount=assets.filter(p=>snapshot.news?.[p.key]?.status==='ok').length,priced=assets.filter(p=>finite(snapshot.quotes?.[p.key]?.price)!==null).length;
  lines.push(`Проверено: новости ${newsCount}/${assets.length} · котировки ${priced}/${assets.length}.`);
  if(newsCount<assets.length||priced<assets.length)lines.push('Есть пробелы в данных — они отмечены в подробностях.');
  if(!weekly)lines.push('<i>Крипта — за 24 часа; бумаги — за последнюю сессию. Это изменения цен, не доходность портфеля.</i>');
- const offer=upgradeOffer(access,{hidden:snapshot.hidden});if(offer.text)lines.push(offer.text);
+ if(offer.text)lines.push(offer.text);
  return lines.join('\n\n');
 }
 
@@ -163,7 +172,7 @@ export function detailText(snapshot,section,access){
 }
 
 export function reportPages(report,snapshot,section,access){
- const text=section==='summary'?summaryText(snapshot,access,{weekly:report.kind==='weekly'}):detailText(snapshot,section,access);
+ const text=section==='summary'?summaryText(snapshot,access,{weekly:report.kind==='weekly',initial:report.kind==='first'}):detailText(snapshot,section,access);
  return splitText(text,3200);
 }
 export function reportKeyboard(id,section,access,page=0,pages=1){
