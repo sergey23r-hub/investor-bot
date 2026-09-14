@@ -126,7 +126,7 @@ export function summaryText(snapshot,access,{weekly=false,initial=false}={}){
  if(initial&&!newsCount&&!priced)return [
   '<b>💼 Portfolius · ваш портфель</b>',
   `Сохранённых счетов: ${snapshot.accounts?.length||0}\nАктивов для обзора: ${assets.length}`,
-  '<b>Ожидаем первый рыночный выпуск</b>\nСостав портфеля сохранён. Новости и котировки появятся с плановой сводкой. /time — проверить время доставки.',
+  `<b>${snapshot.has_prior_daily?'Рыночные данные пока недоступны':'Ожидаем первый рыночный выпуск'}</b>\nСостав портфеля сохранён. Новости и котировки появятся с плановой сводкой. /time — проверить время доставки.`,
   'Кнопка «Активы» покажет сохранённые позиции. Структура доступна, если в портфеле достаточно данных для оценки.',
   offer.text
  ].filter(Boolean).join('\n\n');
@@ -172,8 +172,10 @@ export function detailText(snapshot,section,access){
 }
 
 export function reportPages(report,snapshot,section,access){
+ if(snapshot.empty_portfolio)return ['<b>💼 Portfolius · ваш портфель</b>\n\nВ сохранённых счетах нет позиций. Пришлите скриншоты, чтобы добавить активы.'];
  const text=section==='summary'?summaryText(snapshot,access,{weekly:report.kind==='weekly',initial:report.kind==='first'}):detailText(snapshot,section,access);
- return splitText(text,3200);
+ const reused=snapshot.reused_market_as_of?`<i>Состав от ${dateLabel(snapshot.as_of)}. Часть рыночных данных — из сводки от ${dateLabel(snapshot.reused_market_as_of)}.</i>\n\n`:'';
+ return splitText(reused+text,3200);
 }
 export function reportKeyboard(id,section,access,page=0,pages=1){
  const button=(text,section,p=0)=>({text,callback_data:`report:${section}:${id}:${p}`});
