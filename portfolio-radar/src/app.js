@@ -5,6 +5,7 @@ import {Billing} from './billing.js';
 import {entitledPortfolio,upgradeOffer} from './freemium.js';
 import {dailyResearchKey,quoteCacheKey} from './daily.js';
 import {Insights} from './insights.js';
+import {cachedMarket,rememberQuote,fxCacheKey} from './first-look.js';
 import {BOT_NAME,BOT_DESCRIPTION,BOT_SHORT_DESCRIPTION,welcomeScreen,uploadScreen,exampleScreen,helpScreen} from './onboarding.js';
 export class Database{
  constructor(url,key){this.url=url.replace(/\/$/,'');this.key=key;}
@@ -106,6 +107,7 @@ export class Radar{
   if(!imp.correction)keys.push([{text:imp.mode==='partial'?'Заменить весь счёт':'Обновить только показанные',callback_data:(imp.mode==='partial'?'replace:':'partial:')+imp.id}]);
   keys.push([{text:'Отменить изменения',callback_data:'cancel:'+imp.id}]);
   await this.reply(job,user,text,keys,'preview');
+  await this.insights.event(user,'import_preview',imp.id);
  }
  async showScreen(job,user,screen){
   const view=screen==='upload'?uploadScreen():screen==='example'?exampleScreen():screen==='help'?helpScreen():welcomeScreen(await this.billing.access(user.chat_id));
@@ -184,6 +186,7 @@ export class Radar{
    if(imp.files.some(f=>f.unique_id===file.unique_id))return this.reply(job,id,'Этот скриншот уже добавлен. Пришлите остальные или нажмите /done.');
    if(imp.files.length>=LIMITS.images)return this.reply(job,id,'В одной загрузке до 8 скриншотов. Нажмите /done.');
    await this.db.patch('pr_imports',{files:[...imp.files,file],updated_at:new Date().toISOString()},{id:'eq.'+imp.id});
+   await this.insights.event(id,'upload_started',imp.id);
    return this.reply(job,id,`📸 <b>Скриншот ${imp.files.length+1} добавлен</b>\n\nЕсли портфель не помещается на одном экране, пришлите остальные скриншоты <b>этого же счёта</b>.\n\nВсё загрузили? Нажмите «Распознать позиции».`,[[{text:'🔎 Распознать позиции',callback_data:'ui:done:'+imp.id}],[{text:'Отменить загрузку',callback_data:'cancel:'+imp.id}]]);
   }
   const text=String(msg.text||'').trim(),[command,...args]=text.split(/\s+/);const cmd=command?.split('@')[0].toLowerCase();
@@ -306,15 +309,24 @@ export class Radar{
   if(job.payload.response_id)await this.providers.newsResponse(job.payload.response_id,'DELETE').catch(()=>{});
  }
  async handleDigest(job){
-  // Only the scheduler creates daily jobs. Reject legacy/manual/recovery jobs
-  // before looking up portfolios, calling market providers, or starting AI work.
-  if(job.payload.daily!==true||!String(job.job_key||'').startsWith('daily:'+job.user_id+':'))return;
+  // Daily jobs come from the scheduler. The one-time first report additionally
+  // needs its customer/job reservation. Legacy/manual/recovery jobs remain blocked.
+  const initial=job.payload.initial===true&&await this.insights.initialAllowed(job);
+  if(job.payload.initial===true&&!initial)return;
+  if(!initial&&(job.payload.daily!==true||!String(job.job_key||'').startsWith('daily:'+job.user_id+':')))return;
   const u=(await this.db.get('pr_users',{chat_id:'eq.'+job.user_id}))[0];if(!u||(job.payload.daily&&!u.subscribed))return;
   const access=await this.billing.access(job.user_id);if(!access.allowed)return;
   const all=await this.db.get('pr_accounts',{user_id:'eq.'+job.user_id,order:'id.asc'});if(!all.some(a=>a.positions.length))return;
   const view=entitledPortfolio(all,access,job.payload.entitled_keys),{accounts,assets}=view;
   job.payload.entitled_keys=view.keys;
   job.payload.news_as_of??=new Date().toISOString();
+  if(initial&&!job.payload.initial_seeded){
+   const seed=await cachedMarket(this.db,assets,new Date(job.payload.news_as_of));
+   job.payload.digest_quotes=seed.quotes;job.payload.cache_keys=seed.cache_keys;job.payload.reused_market_as_of=seed.reused_market_as_of;
+   job.payload.initial_fx=seed.fx;
+   job.payload.initial_cached_assets=assets.filter(a=>seed.quotes[a.key]?.status==='ok'&&seed.news[a.key]?.status==='ok').length;
+   job.payload.initial_seeded=true;
+  }
   await this.db.patch('pr_jobs',{payload:job.payload},{id:'eq.'+job.id});
   const kinds=[...new Set(assets.map(a=>a.kind))].sort();
   const market={key:'market',name:'Рынки по направлениям: '+kinds.join(', ')+'; глобальная экономика, Россия'+(kinds.includes('crypto')?', крипторынок':''),kind:'market'};
@@ -336,14 +348,21 @@ export class Radar{
   if(missing.length){
    await Promise.all(missing.slice(0,4).map(async a=>{
     try{quotes[a.key]=await this.providers.memo(quoteCacheKey(a),900,()=>this.providers.quote(a));}catch{quotes[a.key]={status:'unavailable',price:null};}
+    await rememberQuote(this.db,a,quotes[a.key]);
    }));
    job.payload.digest_quotes=quotes;
    await this.db.patch('pr_jobs',{payload:job.payload},{id:'eq.'+job.id});
    if(missing.length>4){await this.db.patch('pr_jobs',{state:'pending',attempts:0,available_at:new Date(Date.now()+1000).toISOString(),lease_until:null},{id:'eq.'+job.id});return 'deferred';}
   }
+  if(initial&&!fx){
+   fx=job.payload.initial_fx||null;
+   const needsFx=assets.some(a=>{const currency=quotes[a.key]?.unit_currency||quotes[a.key]?.currency||a.currency;return /^[A-Z]{3}$/.test(currency||'')&&currency!=='RUB';});
+   if(!fx&&needsFx&&this.providers.facts)fx=await this.providers.memo(fxCacheKey(),86400,async()=>{const value=await this.providers.facts({key:'market'},new Date());return value?.fx||null;}).catch(()=>null);
+  }
   // Re-check access at delivery: a trial can expire while shared news is being prepared.
   const finalAccess=await this.billing.access(job.user_id),finalView=entitledPortfolio(all,finalAccess,view.keys);
-  await this.insights.daily(job,{...u,chat_id:job.user_id},all,finalView,quotes,news,marketResult,facts,fx);
+  if(initial)await this.insights.finishInitial(job,{...u,chat_id:job.user_id},quotes,news,marketResult,facts,fx);
+  else await this.insights.daily(job,{...u,chat_id:job.user_id},all,finalView,quotes,news,marketResult,facts,fx);
  }
  async flush(){
   const rows=await this.db.get('pr_outbox',{state:'eq.pending',available_at:'lte.'+new Date().toISOString(),order:'id.asc',limit:2});
@@ -381,6 +400,7 @@ export class Radar{
     }catch(e){
      const retry=/^(network_timeout|http_|telegram_|database_|search_incomplete)/.test(e.message)&&job.attempts<3;
      await this.db.patch('pr_jobs',{state:retry?'pending':'failed',available_at:new Date(Date.now()+job.attempts*60000).toISOString(),lease_until:null,last_error:String(e.message).slice(0,150)},{id:'eq.'+job.id});
+     if(!retry&&job.payload.initial===true)await this.db.patch('pr_initial_reports',{state:'failed',finished_at:new Date().toISOString()},{user_id:'eq.'+job.user_id,job_id:'eq.'+job.id});
      if(!retry&&job.user_id){
       if(job.payload.message?.successful_payment||job.payload.message?.refunded_payment){await this.reply(job,job.user_id,'Telegram прислал информацию об оплате, но обработка задержалась. Повторно оплачивать не нужно. /paysupport — помощь.',null,'payment_error');count++;await this.flush();continue;}
       if(job.kind==='extract')await this.db.patch('pr_imports',{status:'uploading'},{id:'eq.'+job.payload.import_id,status:'eq.processing'});
@@ -413,7 +433,7 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
  const db=dbOverride||new Database(env.SUPABASE_URL,env.SUPABASE_SERVICE_ROLE_KEY);
  return async req=>{
   const path=new URL(req.url).pathname.split('/').filter(Boolean).at(-1),json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
-  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.4.2',status:'running'});
+  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.5.0',status:'running'});
   if(req.method!=='POST')return json({error:'not_found'},404);
   try{
    const radar=new Radar(db,env);await radar.init();
