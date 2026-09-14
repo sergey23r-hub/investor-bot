@@ -4,6 +4,7 @@ import {parseCorrection,correctionCode,isMarketRefreshRequest} from './correctio
 import {Billing} from './billing.js';
 import {entitledPortfolio,upgradeOffer} from './freemium.js';
 import {dailyResearchKey,quoteCacheKey} from './daily.js';
+import {Insights} from './insights.js';
 import {BOT_NAME,BOT_DESCRIPTION,BOT_SHORT_DESCRIPTION,welcomeScreen,uploadScreen,exampleScreen,helpScreen} from './onboarding.js';
 export class Database{
  constructor(url,key){this.url=url.replace(/\/$/,'');this.key=key;}
@@ -21,7 +22,7 @@ export class Database{
  rpc(name,body={}){return this.request('rpc/'+name,{method:'POST',body});}
 }
 export class Radar{
- constructor(db,env={}){this.db=db;this.env=env;this.billing=new Billing(this);}
+ constructor(db,env={}){this.db=db;this.env=env;this.billing=new Billing(this);this.insights=new Insights(this);}
  async init(){
   this.config=await this.db.rpc('pr_config');
   // Dedicated names avoid accidentally repurposing an existing Telegram bot.
@@ -131,7 +132,16 @@ export class Radar{
   if(cb){
    // Callback answer is a UI acknowledgement, never a financial action.
    await this.telegram('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
-   const [action,ref,rowIndex]=String(cb.data||'').split(':');
+   const [action,ref,rowIndex,pageText]=String(cb.data||'').split(':');
+   if(action==='report')return this.insights.open(job,id,ref,rowIndex,Number(pageText||0));
+   if(action==='insight'){
+    if(ref==='report')return this.insights.open(job,id);
+    if(ref==='week')return this.insights.week(job,id);
+    if(ref==='archive')return this.insights.archive(job,id,Number(rowIndex||0));
+    if(ref==='ask')return this.insights.ask(job,id);
+    if(ref==='learn')return this.insights.learn(job,id);
+    return;
+   }
    if(action==='ui'){
     if(ref==='done'&&rowIndex)return this.beginExtraction(job,user,rowIndex);
     if(['home','start','upload','example','help'].includes(ref))return this.showScreen(job,user,ref);
@@ -143,6 +153,7 @@ export class Radar{
    const imp=(await this.db.get('pr_imports',{id:'eq.'+ref,user_id:'eq.'+id,limit:1}))[0];
    if(!imp)return this.reply(job,id,'Эта загрузка больше недоступна.');
    if(action==='edit'){
+    await this.insights.clearQuestion(id);
     const i=Number(rowIndex);
     if(imp.status!=='preview'||!Number.isInteger(i)||i<0||i>=imp.rows.length)return this.reply(job,id,'Этот список уже изменился. Нажмите /edit.');
     await this.db.patch('pr_imports',{edit_row:i},{id:'eq.'+imp.id});
@@ -150,8 +161,9 @@ export class Radar{
    }
    if(action==='save'||action==='save_notes'){
     const r=await this.db.rpc('pr_commit',{p_import:imp.id,p_user:id,p_allow_unresolved:action==='save_notes'});
-    const offer=upgradeOffer(await this.billing.access(id,true));
-    return this.reply(job,id,r.already_committed?'Этот портфель уже сохранён.':`Портфель сохранён: ${r.count} позиций. Ежедневный обзор — в ${user.digest_time.slice(0,5)} (${html(user.timezone)}).\n\n/time — изменить время обзора. Ручное обновление новостей и котировок недоступно. /pause — остановить рассылку.\n\n${offer.text}`,offer.keyboard);
+    await this.billing.access(id,true);
+    if(r.already_committed)return this.reply(job,id,'Этот портфель уже сохранён. /report — готовый обзор.');
+    return this.insights.afterSave(job,user);
    }
    if(!['uploading','preview'].includes(imp.status))return this.reply(job,id,'Загрузка уже обработана или обрабатывается.');
    if(action==='cancel'){await this.db.patch('pr_imports',{status:'cancelled',files:[]},{id:'eq.'+imp.id});return this.reply(job,id,'Загрузка отменена. Портфель сохранён в прежнем виде.');}
@@ -160,6 +172,7 @@ export class Radar{
   }
   const file=extractFile(msg);
   if(file){
+   await this.insights.clearQuestion(id);
    let imp=await this.currentImport(id);
    if(imp&&imp.status!=='uploading')return this.reply(job,id,'Предыдущая загрузка ещё открыта. Сохраните или отмените её кнопкой; /cancel — отменить.');
    if(!imp){
@@ -173,14 +186,23 @@ export class Radar{
    return this.reply(job,id,`📸 <b>Скриншот ${imp.files.length+1} добавлен</b>\n\nЕсли портфель не помещается на одном экране, пришлите остальные скриншоты <b>этого же счёта</b>.\n\nВсё загрузили? Нажмите «Распознать позиции».`,[[{text:'🔎 Распознать позиции',callback_data:'ui:done:'+imp.id}],[{text:'Отменить загрузку',callback_data:'cancel:'+imp.id}]]);
   }
   const text=String(msg.text||'').trim(),[command,...args]=text.split(/\s+/);const cmd=command?.split('@')[0].toLowerCase();
+  if(cmd?.startsWith('/')&&cmd!=='/ask')await this.insights.clearQuestion(id);
+  if(cmd==='/report')return this.insights.open(job,id);
+  if(cmd==='/week')return this.insights.week(job,id);
+  if(cmd==='/archive')return this.insights.archive(job,id);
+  if(cmd==='/calendar')return this.insights.open(job,id,'calendar');
+  if(cmd==='/structure')return this.insights.open(job,id,'structure');
+  if(cmd==='/learn')return this.insights.learn(job,id);
+  if(cmd==='/ask')return this.insights.ask(job,id,args.join(' '));
+  if(cmd==='/admin')return this.insights.admin(job,id);
   if(cmd==='/subscribe')return this.billing.menu(job,id);
   if(cmd==='/unsubscribe')return this.billing.cancelMenu(job,id);
   if(cmd==='/referral')return this.billing.referral(job,id);
   if(cmd==='/terms')return this.billing.terms(job,id);
   if(cmd==='/paysupport')return this.billing.support(job,id);
-  if(cmd==='/start'||/^(?:начать|старт|start|🚀 начать)$/iu.test(text))return this.showScreen(job,user,'home');
+  if(cmd==='/start'||/^(?:начать|старт|start|🚀 начать)$/iu.test(text)){await this.insights.event(id,'start',job.id);return this.showScreen(job,user,'home');}
   if(cmd==='/help')return this.showScreen(job,user,'help');
-  if(cmd==='/cancel'){const imp=await this.currentImport(id);if(imp)await this.db.patch('pr_imports',{status:'cancelled',files:[]},{id:'eq.'+imp.id});return this.reply(job,id,'Загрузка отменена.');}
+  if(cmd==='/cancel'){await this.insights.clearQuestion(id);const imp=await this.currentImport(id);if(imp)await this.db.patch('pr_imports',{status:'cancelled',files:[]},{id:'eq.'+imp.id});return this.reply(job,id,'Загрузка отменена.');}
   if(cmd==='/done')return this.beginExtraction(job,user);
   if(cmd==='/account'){
    const name=args.join(' ').slice(0,60);const all=await this.db.get('pr_accounts',{user_id:'eq.'+id,order:'created_at.asc'.replace('created_at','updated_at')});
@@ -207,7 +229,10 @@ export class Radar{
    const a=await this.account(user),h=await this.db.get('pr_history',{account_id:'eq.'+a.id,order:'created_at.desc',limit:10});return this.reply(job,id,'<b>Обновления · '+html(a.name)+'</b>\n\n'+(h.map(x=>`${new Date(x.created_at).toLocaleString('ru-RU',{timeZone:user.timezone})}: ${x.before_positions.length} → ${x.after_positions.length} позиций`).join('\n')||'Обновлений пока нет.'));
   }
   if(cmd==='/delete')return this.reply(job,id,'Удалить ваши счета, позиции, историю, загрузки и остановить рассылку? Это действие нельзя отменить.',[[{text:'Удалить мои данные',callback_data:'forget:yes'}]]);
-  if(text&&!text.startsWith('/'))return this.handleCorrection(job,user,text);
+  if(text&&!text.startsWith('/')){
+   if(await this.insights.pendingQuestion(id)){await this.insights.clearQuestion(id);return this.insights.ask(job,id,text);}
+   return this.handleCorrection(job,user,text);
+  }
   return this.reply(job,id,'Неизвестная команда. /edit — исправить позиции, /time — время сводки, /help — помощь.');
  }
  async handleExtract(job){
@@ -275,7 +300,8 @@ export class Radar{
    news={status:'unavailable',items:[],events:[],checked_at:job.payload.search_started_at};
    job.payload.search_error=String(e.message).slice(0,100);
   }
-  await this.db.post('pr_cache',{key:job.job_key,value:{news},expires_at:new Date(Date.now()+7*86400000).toISOString()},{on_conflict:'key'},'resolution=merge-duplicates,return=minimal');
+  const facts=this.providers.facts?await this.providers.facts(asset,new Date(job.payload.search_started_at)).catch(()=>({status:'unavailable',events:[]})):null;
+  await this.db.post('pr_cache',{key:job.job_key,value:{news,facts},expires_at:new Date(Date.now()+7*86400000).toISOString()},{on_conflict:'key'},'resolution=merge-duplicates,return=minimal');
   if(job.payload.response_id)await this.providers.newsResponse(job.payload.response_id,'DELETE').catch(()=>{});
  }
  async handleDigest(job){
@@ -294,15 +320,15 @@ export class Radar{
   // Global market review is deliberately shared; no positions or account values leave through search.
   market.name='Главные события мировой экономики, российского фондового рынка и крипторынка';
   job.payload.news_as_of??=new Date().toISOString();
-  const quotes=job.payload.digest_quotes||{},news={};let marketResult,waiting=false;
+  const quotes=job.payload.digest_quotes||{},news={},facts={};let marketResult,fx=null,waiting=false;
   for(const a of [market,...assets]){
    const key=job.payload.cache_keys?.[a.key]||await this.researchKey(a,new Date(job.payload.news_as_of));
    job.payload.cache_keys??={};job.payload.cache_keys[a.key]=key;
    const c=(await this.db.get('pr_cache',{key:'eq.'+key,limit:1}))[0];
-   if(c&&new Date(c.expires_at)>new Date()){const n=c.value.news;const filtered={...n,items:validateNews(n.items,(n.items||[]).map(x=>x.url),new Date(),n.window_since?(Date.now()-new Date(n.window_since))/3600000:24),events:(n.events||[]).filter(e=>e.date>=new Date().toISOString().slice(0,10))};if(a.key==='market')marketResult=filtered;else{news[a.key]=filtered;}continue;}
+   if(c&&new Date(c.expires_at)>new Date()){const n=c.value.news;const filtered={...n,items:validateNews(n.items,(n.items||[]).map(x=>x.url),new Date(),n.window_since?(Date.now()-new Date(n.window_since))/3600000:24),events:(n.events||[]).filter(e=>e.date>=new Date().toISOString().slice(0,10))};if(a.key==='market'){marketResult=filtered;fx=c.value.facts?.fx||null;}else{news[a.key]=filtered;facts[a.key]={...(c.value.facts||{}),sector:c.value.facts?.sector||n.profile?.sector||null,issuer_name:c.value.facts?.issuer_name||n.profile?.issuer_name||null,metadata_source:c.value.facts?.metadata_source||null,profile_source:n.profile?.url||null};}continue;}
    const existing=(await this.db.get('pr_jobs',{job_key:'eq.'+key,select:'state',limit:1}))[0];
    if(existing&&['failed','done'].includes(existing.state)){news[a.key]={status:'unavailable',items:[]};continue;}
-   await this.queue(key,'research',{asset:{name:a.name,symbol:a.symbol,isin:a.isin,kind:a.kind,key:a.key,provider:a.provider,provider_id:a.provider_id,verified:a.verified,currency:a.currency}});waiting=true;
+   await this.queue(key,'research',{asset:{name:a.name,symbol:a.symbol,isin:a.isin,kind:a.kind,key:a.key,provider:a.provider,provider_id:a.provider_id,verified:a.verified,currency:a.currency,cik:a.cik}});waiting=true;
   }
   if(waiting){await this.db.patch('pr_jobs',{payload:job.payload,state:'pending',attempts:0,available_at:new Date(Date.now()+15000).toISOString(),lease_until:null},{id:'eq.'+job.id});return 'deferred';}
   const missing=assets.filter(a=>!Object.hasOwn(quotes,a.key));
@@ -316,20 +342,25 @@ export class Radar{
   }
   // Re-check access at delivery: a trial can expire while shared news is being prepared.
   const finalAccess=await this.billing.access(job.user_id),finalView=entitledPortfolio(all,finalAccess,view.keys);
-  const messages=digestText({accounts:finalView.accounts,quotes,news,market:marketResult}),offer=upgradeOffer(finalAccess,{hidden:finalView.hidden});
-  for(const[i,text]of messages.entries())await this.reply(job,job.user_id,text+(i===messages.length-1&&offer.text?'\n\n'+offer.text:''),i===messages.length-1?offer.keyboard:null,'digest:'+i);
+  await this.insights.daily(job,{...u,chat_id:job.user_id},all,finalView,quotes,news,marketResult,facts,fx);
  }
  async flush(){
   const rows=await this.db.get('pr_outbox',{state:'eq.pending',available_at:'lte.'+new Date().toISOString(),order:'id.asc',limit:2});
   for(const r of rows){
    const claimed=await this.db.patch('pr_outbox',{state:'sending',attempts:r.attempts+1,available_at:new Date().toISOString()},{id:'eq.'+r.id,state:'eq.pending'});
    if(!claimed?.length)continue;
-   try{const res=await this.telegram(r.method,r.body);await this.db.patch('pr_outbox',{state:'sent',telegram_message_id:res?.message_id??null,body:{}},{id:'eq.'+r.id});}
+   let attempted=false,delivered=false;
+   try{
+    const body=await this.insights.deliveryBody(r);
+    if(!body){await this.db.patch('pr_outbox',{state:'failed',last_error:'report_or_access_changed',body:{}},{id:'eq.'+r.id});continue;}
+    attempted=true;const res=await this.telegram(r.method,body);delivered=true;await this.db.patch('pr_outbox',{state:'sent',telegram_message_id:res?.message_id??null,body:{}},{id:'eq.'+r.id});
+    await this.insights.delivered(r);
+   }
    catch(e){
     // Telegram has no idempotency key for sendMessage. Ambiguous network delivery
     // is retained for inspection rather than automatically duplicating a digest.
-    const retry=e.status===429||(e.status>=500&&e.status<=599);
-    await this.db.patch('pr_outbox',{state:retry&&r.attempts<5?'pending':e.status?'failed':'uncertain',available_at:new Date(Date.now()+(e.retryAfter||60)*1000).toISOString(),last_error:e.status?'telegram_'+e.status:'delivery_status_unknown'},{id:'eq.'+r.id});
+    const retry=!delivered&&(!attempted||e.status===429||(e.status>=500&&e.status<=599));
+    await this.db.patch('pr_outbox',{state:retry&&r.attempts<5?'pending':delivered||attempted&&!e.status?'uncertain':'failed',available_at:new Date(Date.now()+(e.retryAfter||60)*1000).toISOString(),last_error:delivered?'sent_tracking_failed':!attempted?'report_render_pending':e.status?'telegram_'+e.status:'delivery_status_unknown'},{id:'eq.'+r.id});
     if(e.status===403)await this.db.patch('pr_users',{subscribed:false},{chat_id:'eq.'+r.user_id});
    }
   }
@@ -366,7 +397,7 @@ export class Radar{
   const current=await this.telegram('getWebhookInfo',{});const target=base.replace(/\/$/,'')+'/webhook';
   if(current.url&&current.url!==target)throw new Error('bot_already_connected_elsewhere');
   await this.telegram('setWebhook',{url:target,secret_token:this.config.webhook_secret,allowed_updates:['message','callback_query','pre_checkout_query'],max_connections:10,drop_pending_updates:false});
-  await this.telegram('setMyCommands',{commands:[{command:'start',description:'Главный экран Portfolius'},{command:'help',description:'Как пользоваться Portfolius'},{command:'done',description:'Распознать загруженные скриншоты'},{command:'portfolio',description:'Мои позиции'},{command:'edit',description:'Исправить позицию'},{command:'subscribe',description:'Моя подписка'},{command:'referral',description:'Пригласить друзей'},{command:'unsubscribe',description:'Отключить продление'},{command:'paysupport',description:'Помощь с оплатой'},{command:'terms',description:'Условия подписки'},{command:'account',description:'Выбрать счёт'},{command:'time',description:'Время ежедневной сводки'},{command:'pause',description:'Остановить рассылку'},{command:'resume',description:'Включить рассылку'},{command:'cancel',description:'Отменить загрузку'},{command:'delete',description:'Удалить мои данные'}]});
+  await this.telegram('setMyCommands',{commands:[{command:'start',description:'Главный экран Portfolius'},{command:'help',description:'Как пользоваться Portfolius'},{command:'done',description:'Распознать загруженные скриншоты'},{command:'report',description:'Открыть готовый обзор'},{command:'week',description:'Итоги недели'},{command:'calendar',description:'Календарь событий и выплат'},{command:'structure',description:'Структура портфеля'},{command:'archive',description:'Архив обзоров'},{command:'ask',description:'Задать вопрос по портфелю'},{command:'learn',description:'Объяснение терминов'},{command:'portfolio',description:'Мои позиции'},{command:'edit',description:'Исправить позицию'},{command:'subscribe',description:'Моя подписка'},{command:'referral',description:'Пригласить друзей'},{command:'unsubscribe',description:'Отключить продление'},{command:'paysupport',description:'Помощь с оплатой'},{command:'terms',description:'Условия подписки'},{command:'account',description:'Выбрать счёт'},{command:'time',description:'Время ежедневной сводки'},{command:'pause',description:'Остановить рассылку'},{command:'resume',description:'Включить рассылку'},{command:'cancel',description:'Отменить загрузку'},{command:'delete',description:'Удалить мои данные'}]});
   for(const language_code of ['', 'ru']){
    await this.telegram('setMyName',{name:BOT_NAME,language_code});
    await this.telegram('setMyDescription',{description:BOT_DESCRIPTION,language_code});
@@ -381,7 +412,7 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
  const db=dbOverride||new Database(env.SUPABASE_URL,env.SUPABASE_SERVICE_ROLE_KEY);
  return async req=>{
   const path=new URL(req.url).pathname.split('/').filter(Boolean).at(-1),json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
-  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.3.1',status:'running'});
+  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.4.0',status:'running'});
   if(req.method!=='POST')return json({error:'not_found'},404);
   try{
    const radar=new Radar(db,env);await radar.init();
@@ -402,7 +433,8 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
     waitUntil(radar.work().catch(()=>console.error('portfolio_worker_failed')));return json({ok:true});
    }
    if(!timingSafe(req.headers.get('x-portfolio-worker-secret'),radar.config.worker_secret))return json({error:'unauthorized'},401);
-   if(path==='billing-work'){waitUntil(radar.billing.bank.work().catch(()=>console.error('billing_worker_failed')));return json({accepted:true});}
+   if(path==='billing-work'){waitUntil(Promise.allSettled([radar.billing.bank.work(),radar.insights.maintenance()]).then(async results=>{if(results.some(r=>r.status==='rejected'))console.error('billing_or_lifecycle_pending');await radar.flush();}));return json({accepted:true});}
+   if(path==='metrics')return json(await radar.db.rpc('pr_product_metrics'));
    if(path==='billing-probe')return json(await radar.billing.bank.gateway('Status'));
    if(path==='work'){waitUntil(radar.work().catch(()=>console.error('portfolio_worker_failed')));return json({accepted:true});}
    if(path==='probe'){const started=Date.now();try{const me=await radar.telegram('getMe',{});return json({ok:true,username:me.username,elapsed_ms:Date.now()-started});}catch(e){return json({ok:false,code:e.message,elapsed_ms:Date.now()-started});}}
