@@ -229,6 +229,68 @@ test('an existing portfolio opens from cache before the first new daily report w
  assert.equal(f.events.some(e=>e.event==='saved'),false);
 });
 
+test('a saved portfolio supersedes an earlier daily view while reusing dated data only for its current assets',async()=>{
+ const f=fixture(),prior=snapshot();prior.as_of=new Date(+now-3600000).toISOString();
+ prior.accounts=prior.accounts.map(a=>({...a,updated_at:prior.as_of}));
+ f.reports.push({id,user_id:42,kind:'daily',service_day:today,snapshot:structuredClone(prior)});
+ const originalGet=f.db.get,currentAccounts=[{...accounts[0],positions:[{...positions[0],quantity:'37'},positions[1]],updated_at:now.toISOString()}];
+ f.db.get=(table,q)=>table==='pr_accounts'?Promise.resolve(currentAccounts):originalGet(table,q);
+ f.radar.queue=async()=>assert.fail('screenshot must not start research');
+ await f.radar.insights.afterSave({id:20},{chat_id:42},{announce:false});
+ const current=await f.radar.insights.current(42);
+ assert.equal(current.kind,'first');assert.equal(current.snapshot.accounts[0].positions[0].quantity,'37');
+ assert.deepEqual(Object.keys(current.snapshot.quotes),['a0','a1']);assert.deepEqual(Object.keys(current.snapshot.news),['a0','a1']);
+ assert.equal(current.snapshot.reused_market_as_of,prior.as_of);
+ assert.equal(f.reports.find(r=>r.id===id).snapshot.accounts[0].positions[0].quantity,'10');
+ await f.radar.insights.open({id:21},42);
+ const delivery=await f.radar.insights.deliveryBody(f.outbox.at(-1));assert.match(delivery.text,/Часть рыночных данных/);
+ // A worker finishing after the edit must not make its older account versions current.
+ f.reports.find(r=>r.id===id).snapshot.as_of=new Date(+now+10000).toISOString();
+ assert.equal((await f.radar.insights.current(42)).kind,'first');
+ f.reports.push({id:crypto.randomUUID(),user_id:42,kind:'daily',service_day:tomorrow,snapshot:{...snapshot(),as_of:new Date(+now+86400000).toISOString()}});
+ assert.equal((await f.radar.insights.current(42)).service_day,tomorrow);
+});
+
+test('portfolio save does not reuse expired reports or quotes and keeps free fallback within three assets',async()=>{
+ for(const scenario of ['old_report','old_quote','free']){
+  const f=fixture(),prior=snapshot();prior.as_of=new Date(+now-(scenario==='old_report'?8*86400000:3600000)).toISOString();
+  if(scenario==='old_quote')for(const q of Object.values(prior.quotes))q.as_of=new Date(+now-8*86400000).toISOString();
+  f.reports.push({id,user_id:42,kind:'daily',service_day:today,snapshot:prior});if(scenario==='free')f.setAccess(free);
+  const first=await f.radar.insights.afterSave({id:22},{chat_id:42},{announce:false});
+  if(scenario==='free'){assert.deepEqual(Object.keys(first.snapshot.quotes),['a0','a1','a2']);assert.deepEqual(Object.keys(first.snapshot.news),['a0','a1','a2']);}
+  else assert.deepEqual(first.snapshot.quotes,{});
+  if(scenario==='old_report')assert.deepEqual(first.snapshot.news,{});
+ }
+});
+
+test('questions receive current quantities per account from the newer saved portfolio, without a market search',async()=>{
+ const f=fixture(),prior=snapshot();prior.as_of=new Date(+now-3600000).toISOString();
+ const updated=snapshot();updated.accounts=[{...accounts[0],positions:[{...positions[0],quantity:'37'}]},{...accounts[0],id:'second',name:'Second',positions:[{...positions[0],quantity:'2.5'}]}];
+ f.reports.push({id,user_id:42,kind:'daily',service_day:today,snapshot:prior},{id:crypto.randomUUID(),user_id:42,kind:'first',service_day:today,snapshot:updated});
+ f.radar.config={openai_key:'test'};let reservations=0,request;f.db.rpc=async name=>{assert.equal(name,'pr_qa_reserve');reservations++;return {allowed:true,remaining:2};};
+ f.radar.recordUsage=async()=>{};
+ const original=globalThis.fetch;globalThis.fetch=async(_url,options)=>{request=JSON.parse(options.body);return Response.json({id:'resp_qty',status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({answer:'Количество по счетам сохранено.',source_ids:[]})}]}]});};
+ try{
+  await f.radar.insights.ask({id:23},42,'Какое количество у меня на счетах?');
+  const context=JSON.parse(request.input).snapshot;
+  assert.equal(context.assets.length,1);assert.deepEqual(context.assets[0].holdings.map(h=>[h.account,h.quantity]),[['Main','37'],['Second','2.5']]);
+  assert.equal(request.tools,undefined);assert.equal(reservations,1);assert.equal(f.outbox.length,1);
+ }finally{globalThis.fetch=original;}
+});
+
+test('removing all positions supersedes the old daily portfolio and does not consume a question',async()=>{
+ const f=fixture(),prior=snapshot();prior.as_of=new Date(+now-3600000).toISOString();
+ f.reports.push({id,user_id:42,kind:'daily',service_day:today,snapshot:prior});
+ const get=f.db.get;f.db.get=(table,q)=>table==='pr_accounts'?Promise.resolve([{...accounts[0],positions:[]}]):get(table,q);
+ f.db.rpc=async()=>assert.fail('empty portfolio must not reserve a question');
+ await f.radar.insights.afterSave({id:24},{chat_id:42});
+ assert.equal((await f.radar.insights.current(42)).snapshot.empty_portfolio,true);
+ await f.radar.insights.open({id:25},42);
+ const body=await f.radar.insights.deliveryBody(f.outbox.at(-1));assert.match(body.text,/нет позиций/);assert.doesNotMatch(body.text,/Holding_|News for/);
+ assert.equal(body.reply_markup.inline_keyboard[0][0].callback_data,'ui:upload');
+ await f.radar.insights.ask({id:26},42,'Что у меня осталось?');assert.match(f.replies.at(-1).text,/портфель с позициями/);
+});
+
 test('outbox retries a render failure before sending but never resends after a Telegram acknowledgement',async()=>{
  for(const stage of ['render','tracking']){
   const f=fixture(),patches=[];let sends=0;
