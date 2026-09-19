@@ -398,12 +398,21 @@ export class Radar{
      const result=await ({update:()=>this.handleUpdate(job),extract:()=>this.handleExtract(job),research:()=>this.handleResearch(job),digest:()=>this.handleDigest(job)}[job.kind])();
      if(result!=='deferred')await this.db.patch('pr_jobs',{state:'done',payload:['update','extract'].includes(job.kind)?{}:job.payload,lease_until:null,last_error:null},{id:'eq.'+job.id});
     }catch(e){
-     const retry=/^(network_timeout|http_|telegram_|database_|search_incomplete)/.test(e.message)&&job.attempts<3;
-     await this.db.patch('pr_jobs',{state:retry?'pending':'failed',available_at:new Date(Date.now()+job.attempts*60000).toISOString(),lease_until:null,last_error:String(e.message).slice(0,150)},{id:'eq.'+job.id});
+     const retry=e.retryable!==false&&/^(network_timeout|http_|telegram_|database_|search_incomplete)/.test(e.message)&&job.attempts<3;
+     const retryDelay=Math.max(job.attempts*60,Number.isFinite(e.retryAfter)?e.retryAfter:0);
+     await this.db.patch('pr_jobs',{state:retry?'pending':'failed',available_at:new Date(Date.now()+retryDelay*1000).toISOString(),lease_until:null,last_error:String(e.message).slice(0,150)},{id:'eq.'+job.id});
      if(!retry&&job.payload.initial===true)await this.db.patch('pr_initial_reports',{state:'failed',finished_at:new Date().toISOString()},{user_id:'eq.'+job.user_id,job_id:'eq.'+job.id});
      if(!retry&&job.user_id){
       if(job.payload.message?.successful_payment||job.payload.message?.refunded_payment){await this.reply(job,job.user_id,'Telegram прислал информацию об оплате, но обработка задержалась. Повторно оплачивать не нужно. /paysupport — помощь.',null,'payment_error');count++;await this.flush();continue;}
       if(job.kind==='extract')await this.db.patch('pr_imports',{status:'uploading'},{id:'eq.'+job.payload.import_id,status:'eq.processing'});
+      const quota=['openai_credit_balance_exhausted','openai_insufficient_quota'].includes(e.message);
+      if(quota||job.kind==='extract'&&e.message==='http_429'){
+       const owner=job.user_id===Number(this.env.PORTFOLIO_OWNER_CHAT||85572233);
+       const reason=quota&&owner?(e.message==='openai_credit_balance_exhausted'?'На OpenAI API закончились кредиты. Пополните баланс API.':'OpenAI API отклонил запрос из-за квоты. Проверьте баланс и лимит расходов API.'):'Сервис распознавания временно недоступен. Попробуйте позже.';
+       const text=job.kind==='extract'?'⚠️ <b>Распознавание приостановлено</b>\n\n'+reason+'\n\nСкриншоты остаются в текущей загрузке. После восстановления сервиса нажмите «Распознать позиции» — повторно отправлять изображения сейчас не нужно.':(owner?reason:'ИИ-сервис временно недоступен. Попробуйте позже.');
+       const keyboard=job.kind==='extract'?[[{text:'🔎 Распознать позиции',callback_data:'ui:done:'+job.payload.import_id}]]:null;
+       await this.reply(job,job.user_id,text,keyboard,'error');count++;await this.flush();continue;
+      }
       const friendly={stale_import:'Портфель уже изменился. Отмените эту загрузку и пришлите новые скриншоты.',unresolved_rows:'Сначала уточните отмеченные позиции через /fix.',import_not_ready:'Эта загрузка ещё не готова к сохранению.',positions_not_found:'На скриншоте не удалось найти позиции. Пришлите более чёткое изображение.',openai_key_missing:'Распознавание пока не подключено.'};
       await this.reply(job,job.user_id,friendly[e.message]||'Не удалось завершить обработку. Сохранённый портфель не изменился. Повторите команду; для новой загрузки — /cancel.',null,'error');
      }
@@ -433,7 +442,7 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
  const db=dbOverride||new Database(env.SUPABASE_URL,env.SUPABASE_SERVICE_ROLE_KEY);
  return async req=>{
   const path=new URL(req.url).pathname.split('/').filter(Boolean).at(-1),json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
-  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.5.0',status:'running'});
+  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.5.1',status:'running'});
   if(req.method!=='POST')return json({error:'not_found'},404);
   try{
    const radar=new Radar(db,env);await radar.init();
