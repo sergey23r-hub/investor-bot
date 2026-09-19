@@ -3,10 +3,28 @@ import {jsonOutput,sourceUrls,validateNews,canonicalUrl,decimal,safeUrl,newsWind
 import {internationalQuote,internationalResolve} from './international.js';
 import {usageRecord} from './usage.js';
 export const MODEL='gpt-5.4-mini-2026-03-17';
+function openaiError(detail,status=500){
+  // Keep only known machine codes: provider messages can contain private data.
+  const code=detail?.code,type=detail?.type;
+  const exhausted=code==='credit_balance_exhausted';
+  const quota=exhausted||code==='insufficient_quota'||type==='insufficient_quota'||code==='billing_hard_limit_reached';
+  const e=new Error(exhausted?'openai_credit_balance_exhausted':quota?'openai_insufficient_quota':code==='rate_limit_exceeded'?'http_429':`http_${status}`);
+  e.status=quota||code==='rate_limit_exceeded'?429:status;
+  if(quota)e.retryable=false;
+  return e;
+}
 export async function fetchJson(url,options={},timeout=25000){
   let response;
   try{response=await fetch(url,{...options,signal:AbortSignal.timeout(timeout)});}catch{throw new Error('network_timeout');}
-  if(!response.ok){const e=new Error(`http_${response.status}`);e.status=response.status;e.retryAfter=Number(response.headers.get('retry-after'))||60;throw e;}
+  if(!response.ok){
+    const isOpenAI=new URL(url).origin==='https://api.openai.com';
+    const detail=isOpenAI?(await response.json().catch(()=>null))?.error:null;
+    const e=isOpenAI?openaiError(detail,response.status):new Error(`http_${response.status}`);
+    e.status??=response.status;
+    const retryAfter=Number(response.headers.get('retry-after'));
+    e.retryAfter=Number.isFinite(retryAfter)&&retryAfter>0?retryAfter:60;
+    throw e;
+  }
   return response.json();
 }
 const nullable={type:['string','null']};
@@ -117,7 +135,7 @@ export class Providers{
     const res=response||await fetchJson('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${this.config.openai_key}`,'Content-Type':'application/json'},body:JSON.stringify({model:MODEL,store:background,background,instructions:instruction,input:'Проверь источники и подготовь результат.',tools:[{type:'web_search',search_context_size:'medium'}],tool_choice:'required',include:['web_search_call.action.sources'],reasoning:{effort:'low'},max_tool_calls:4,max_output_tokens:5000,text:{format:{type:'json_schema',name:'asset_news',strict:true,schema:newsSchema}}})},background?20000:95000);
     if(background&&['queued','in_progress'].includes(res.status)){if(!res.id)throw new Error('search_id_missing');return {pending:true,response_id:res.id};}
     await this.onUsage(usageRecord(res,'research',p.key));
-    if(res.status==='failed'&&res.error?.code==='rate_limit_exceeded'){const e=new Error('http_429');e.status=429;e.terminalResponse=true;throw e;}
+    if(res.status==='failed'){const e=openaiError(res.error);e.terminalResponse=true;throw e;}
     if(res.status==='incomplete'){const e=new Error('search_incomplete');e.terminalResponse=true;throw e;}
     if(!(res.output??[]).some(x=>x.type==='web_search_call'&&x.status==='completed'))throw new Error('search_not_completed');
     const raw=jsonOutput(res),sources=sourceUrls(res),allowed=new Set(sources.map(canonicalUrl));
