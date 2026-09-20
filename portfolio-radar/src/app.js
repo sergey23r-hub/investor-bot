@@ -5,6 +5,7 @@ import {Billing} from './billing.js';
 import {entitledPortfolio,upgradeOffer} from './freemium.js';
 import {dailyResearchKey,quoteCacheKey} from './daily.js';
 import {Insights} from './insights.js';
+import {Outlooks} from './outlooks.js';
 import {cachedMarket,rememberQuote,fxCacheKey} from './first-look.js';
 import {BOT_NAME,BOT_DESCRIPTION,BOT_SHORT_DESCRIPTION,welcomeScreen,uploadScreen,exampleScreen,helpScreen} from './onboarding.js';
 export class Database{
@@ -23,7 +24,7 @@ export class Database{
  rpc(name,body={}){return this.request('rpc/'+name,{method:'POST',body});}
 }
 export class Radar{
- constructor(db,env={}){this.db=db;this.env=env;this.billing=new Billing(this);this.insights=new Insights(this);}
+ constructor(db,env={}){this.db=db;this.env=env;this.billing=new Billing(this);this.insights=new Insights(this);this.outlooks=new Outlooks(this);}
  async init(){
   this.config=await this.db.rpc('pr_config');
   // Dedicated names avoid accidentally repurposing an existing Telegram bot.
@@ -138,6 +139,7 @@ export class Radar{
    if(action!=='insight'||ref!=='ask')await this.insights.clearQuestion(id);
    if(action==='report')return this.insights.open(job,id,ref,rowIndex,Number(pageText||0));
    if(action==='insight'){
+    if(ref==='outlook')return this.outlooks.open(job,id,Number(rowIndex||0));
     if(ref==='report')return this.insights.open(job,id);
     if(ref==='week')return this.insights.week(job,id);
     if(ref==='archive')return this.insights.archive(job,id,Number(rowIndex||0));
@@ -192,6 +194,7 @@ export class Radar{
   const text=String(msg.text||'').trim(),[command,...args]=text.split(/\s+/);const cmd=command?.split('@')[0].toLowerCase();
   if(cmd?.startsWith('/')&&cmd!=='/ask')await this.insights.clearQuestion(id);
   if(cmd==='/report')return this.insights.open(job,id);
+  if(cmd==='/outlook'||cmd==='/forecasts')return this.outlooks.open(job,id);
   if(cmd==='/week')return this.insights.week(job,id);
   if(cmd==='/archive')return this.insights.archive(job,id);
   if(cmd==='/calendar')return this.insights.open(job,id,'calendar');
@@ -427,7 +430,7 @@ export class Radar{
   const current=await this.telegram('getWebhookInfo',{});const target=base.replace(/\/$/,'')+'/webhook';
   if(current.url&&current.url!==target)throw new Error('bot_already_connected_elsewhere');
   await this.telegram('setWebhook',{url:target,secret_token:this.config.webhook_secret,allowed_updates:['message','callback_query','pre_checkout_query'],max_connections:10,drop_pending_updates:false});
-  await this.telegram('setMyCommands',{commands:[{command:'start',description:'Главный экран Portfolius'},{command:'help',description:'Как пользоваться Portfolius'},{command:'done',description:'Распознать загруженные скриншоты'},{command:'report',description:'Открыть готовый обзор'},{command:'week',description:'Итоги недели'},{command:'calendar',description:'Календарь событий и выплат'},{command:'structure',description:'Структура портфеля'},{command:'archive',description:'Архив обзоров'},{command:'ask',description:'Задать вопрос по портфелю'},{command:'learn',description:'Объяснение терминов'},{command:'portfolio',description:'Мои позиции'},{command:'edit',description:'Исправить позицию'},{command:'subscribe',description:'Моя подписка'},{command:'referral',description:'Пригласить друзей'},{command:'unsubscribe',description:'Отключить продление'},{command:'paysupport',description:'Помощь с оплатой'},{command:'terms',description:'Условия подписки'},{command:'account',description:'Выбрать счёт'},{command:'time',description:'Время ежедневной сводки'},{command:'pause',description:'Остановить рассылку'},{command:'resume',description:'Включить рассылку'},{command:'cancel',description:'Отменить загрузку'},{command:'delete',description:'Удалить мои данные'}]});
+  await this.telegram('setMyCommands',{commands:[{command:'start',description:'Главный экран Portfolius'},{command:'help',description:'Как пользоваться Portfolius'},{command:'done',description:'Распознать загруженные скриншоты'},{command:'report',description:'Открыть готовый обзор'},{command:'outlook',description:'Прогнозы и ориентиры по активам'},{command:'week',description:'Итоги недели'},{command:'calendar',description:'Календарь событий и выплат'},{command:'structure',description:'Структура портфеля'},{command:'archive',description:'Архив обзоров'},{command:'ask',description:'Задать вопрос по портфелю'},{command:'learn',description:'Объяснение терминов'},{command:'portfolio',description:'Мои позиции'},{command:'edit',description:'Исправить позицию'},{command:'subscribe',description:'Моя подписка'},{command:'referral',description:'Пригласить друзей'},{command:'unsubscribe',description:'Отключить продление'},{command:'paysupport',description:'Помощь с оплатой'},{command:'terms',description:'Условия подписки'},{command:'account',description:'Выбрать счёт'},{command:'time',description:'Время ежедневной сводки'},{command:'pause',description:'Остановить рассылку'},{command:'resume',description:'Включить рассылку'},{command:'cancel',description:'Отменить загрузку'},{command:'delete',description:'Удалить мои данные'}]});
   for(const language_code of ['', 'ru']){
    await this.telegram('setMyName',{name:BOT_NAME,language_code});
    await this.telegram('setMyDescription',{description:BOT_DESCRIPTION,language_code});
@@ -442,7 +445,7 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
  const db=dbOverride||new Database(env.SUPABASE_URL,env.SUPABASE_SERVICE_ROLE_KEY);
  return async req=>{
   const path=new URL(req.url).pathname.split('/').filter(Boolean).at(-1),json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
-  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.5.1',status:'running'});
+  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.6.0',status:'running'});
   if(req.method!=='POST')return json({error:'not_found'},404);
   try{
    const radar=new Radar(db,env);await radar.init();
@@ -463,6 +466,7 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
     waitUntil(radar.work().catch(()=>console.error('portfolio_worker_failed')));return json({ok:true});
    }
    if(!timingSafe(req.headers.get('x-portfolio-worker-secret'),radar.config.worker_secret))return json({error:'unauthorized'},401);
+   if(path==='outlook-work'){waitUntil(radar.outlooks.work().catch(()=>console.error('outlook_worker_failed')));return json({accepted:true});}
    if(path==='billing-work'){waitUntil(Promise.allSettled([radar.billing.bank.work(),radar.insights.maintenance()]).then(async results=>{if(results.some(r=>r.status==='rejected'))console.error('billing_or_lifecycle_pending');await radar.flush();}));return json({accepted:true});}
    if(path==='metrics')return json(await radar.db.rpc('pr_product_metrics'));
    if(path==='billing-probe')return json(await radar.billing.bank.gateway('Status'));

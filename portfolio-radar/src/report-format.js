@@ -186,6 +186,7 @@ export function reportKeyboard(id,section,access,page=0,pages=1){
  if(section!=='summary')keyboard.push([button('← Короткая сводка','summary')]);
  keyboard.push([{text:'📅 Итоги недели',callback_data:'insight:week'},{text:'🗂 Архив',callback_data:'insight:archive'}]);
  keyboard.push([button('🌍 Рынок','market'),{text:'💬 Вопрос по портфелю',callback_data:'insight:ask'}]);
+ keyboard.push([{text:'🔭 Прогнозы и ориентиры',callback_data:'insight:outlook'}]);
  if(!fullAccess(access))keyboard.push([{text:'💎 Открыть весь портфель',callback_data:'billing:upgrade'}]);
  return keyboard;
 }

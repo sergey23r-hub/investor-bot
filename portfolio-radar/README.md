@@ -151,3 +151,43 @@ Cron `portfolio-radar-billing` проверяет задолжавшие про�
 Главный экран: «Добавить скриншоты», «Пример сводки», «Как это работает» и предложение полного доступа. Подсказка загрузки объясняет скрепку Telegram и проверку распознанных позиций. После изображения появляется кнопка «Распознать позиции», привязанная к конкретной загрузке; старая кнопка не запускает новую загрузку. `/done` продолжает работать. Демонстрационная сводка явно обозначена как условный пример и не вызывает запросы новостей или котировок.
 
 Первый вход не запускает пробный период; 72 часа по-прежнему начинаются после первого сохранения портфеля. Реферальный параметр `/start ref_…` сохраняется. Кнопки подключения ведут на условия подписки, без создания счёта до отдельного согласия.
+
+
+
+## 0.6 — shared forecasts and market context
+
+`/outlook` and the “Прогнозы и ориентиры” button read shared stored data only.
+Free access is one largest holding by aggregate position value across accounts,
+with fresh FX conversion. If any position cannot be valued, the bot asks for
+updated portfolio details instead of incorrectly choosing a smaller position.
+Trial/paid users can open every asset. Quotes/news retain their existing first-three
+free allowance. Delivery rechecks membership, access and valuation, including old
+buttons and queued messages.
+
+A separate authenticated `/outlook-work` worker uses lock lane 3. Jobs are unique
+per canonical asset and Moscow calendar day. Public source reservations are
+written before requests; failures/ambiguous timeouts are cached until the next day.
+The shared data tables contain instrument metadata, never quantities or user IDs.
+A minute cron discovers newly saved portfolios and drains up to three assets per
+invocation. Sources run only through that worker, with bounded requests and no
+OpenAI calls, API keys, paid subscriptions, authentication workarounds or retries
+through alternate IP addresses.
+
+Sources: Finam public RSS (CC BY 4.0), Bank of Russia economist survey and FX,
+MOEX ISS bond parameters/yields and prices, CoinGecko public spot prices, Binance
+public perpetual funding for explicitly mapped token IDs. Pages that deny access
+are not scraped. Forecast coverage is inherently incomplete: stock/fund/crypto
+targets are included only when the asset, analytical house, amount and currency
+are explicit. Three independent houses with the same horizon/currency are needed
+for a median consensus. A publisher byline alone is insufficient attribution.
+Forecasts expire after 90 days; rendered collection snapshots after seven days;
+funding after two days. Macro forecasts are annual averages, not year-end rates.
+Bond yields and crypto funding are labeled market context, never analyst targets.
+No target for an index or a fund constituent is transferred to the fund unit.
+
+Deployment: apply `database/release_v6/outlooks.sql`, deploy all `src/*` files plus
+`deno.json` with verify_jwt=false and existing custom endpoint authentication, then
+apply `database/release_v6/schedule.sql` and refresh Telegram registration metadata.
+`/admin` includes daily coverage, failed sources and 30-day outlook opens.
+Roll back the app first and unschedule `portfolio-radar-outlooks` if needed;
+existing quote/news/payment workers and their tables are independent.

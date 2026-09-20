@@ -20,5 +20,6 @@ export function upgradeOffer(access,{hidden=null}={}){
  const state=access.tier==='trial'?`🎁 <b>Полный доступ до ${trialDeadline(access)}</b>\nПосле бесплатных 72 часов сводка продолжится по трём активам.`:
   access.tier==='pending'?'🎁 <b>Первые 3 дня — бесплатно</b>\n72 часа полного доступа начнутся после первого сохранения портфеля.':
   `🔓 <b>Бесплатно — три актива</b>${hidden>0?'\nЕщё '+hidden+' активов доступны в полном обзоре.':''}\nВ сводке — первые три актива портфеля.`;
- return {text:state+'\n💎 Весь портфель — 290 ₽ в неделю.',keyboard:[[{text:'💎 Открыть весь портфель',callback_data:'billing:upgrade'}]]};
+ return {text:state+'\n🔭 Прогнозы и ориентиры: бесплатно — крупнейший актив, в подписке — весь портфель.'+'\n💎 Весь портфель — 290 ₽ в неделю.',keyboard:[[{text:'💎 Открыть весь портфель',callback_data:'billing:upgrade'}]]};
 }
+
