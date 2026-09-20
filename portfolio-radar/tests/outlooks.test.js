@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import {parseFeed,parseOpinion,consensus,parseSurvey,parseBond,parseFunding} from '../src/outlook-data.js';
 import {OutlookProvider,publicText} from '../src/outlook-provider.js';
 import {largestHolding,outlookAssets,outlookBody,outlookCard} from '../src/outlook-format.js';
@@ -101,6 +100,12 @@ test('a daily source reservation deduplicates concurrent loads, failures and new
  const a=new OutlookProvider(db,{now}),b=new OutlookProvider(db,{now}),loader=async()=>{calls++;throw new Error('private raw body');};
  await Promise.all([a.once('shared',loader),b.once('shared',loader)]);await b.once('shared',loader);assert.equal(calls,1);assert.equal([...records.values()][0].error,'source_unavailable');
  await new OutlookProvider(db,{now:new Date(+now+86400000)}).once('shared',async()=>{calls++;return {};});assert.equal(calls,2);
+});
+test('an unrelated macro survey does not inflate stock/crypto forecast coverage',async()=>{
+ const provider=new OutlookProvider({get:async()=>[],post:async()=>[]},{now});
+ provider.once=async key=>key==='cbr:survey'?{status:'ok',data:{as_of:'2026-09-01',rates:[{year:2026,value:14.5}],inflation:[],usd:[]}}:{status:'empty',data:null};
+ assert.equal((await provider.collect(position('A'))).status,'unavailable');
+ assert.equal((await provider.collect({...position('F'),kind:'fund'})).status,'context');
 });
 test('outlook worker endpoint requires worker authentication and HTTP collector rejects arbitrary hosts',async()=>{
  const handler=createHandler({},()=>{}, {rpc:async()=>({worker_secret:'worker',webhook_secret:'telegram'})});

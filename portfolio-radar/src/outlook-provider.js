@@ -72,7 +72,8 @@ export class OutlookProvider{
   }
   if(result.quote)await rememberQuote(this.db,asset,result.quote,now);
   result.source_statuses=source_statuses;
-  result.status=result.consensus?'consensus':result.opinions.length?'opinions':result.bond?.yield!==null&&result.bond?.yield!==undefined||result.crypto||result.macro?'context':'unavailable';
+  const context=result.bond||result.crypto||(result.macro&&(['bond','fund','cash','currency'].includes(asset.kind)||asset.provider==='cash'));
+  result.status=result.consensus?'consensus':result.opinions.length?'opinions':context?'context':'unavailable';
   return result;
  }
 }
