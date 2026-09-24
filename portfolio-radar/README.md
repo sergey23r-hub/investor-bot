@@ -213,3 +213,35 @@ Authenticated POST `/billing-audit` accepts `{ "order_id": "pr_..." }` and perfo
 GetState only for an existing Portfolius order. It neither changes access nor
 creates, retries or charges a payment, and sends no Telegram messages. Failed or
 cancelled subscriptions are not automatically reactivated by this endpoint.
+
+## 0.6.2 — reconnect checkout recovery (24 September 2026)
+
+The authenticated T-Bank Init API now returns `https://pay.tbank-online.com/`
+payment links. The previous URL allowlist rejected that host after a successful
+Init, losing the payment ID and leaving subsequent clicks stuck on the same
+pending checkout. The exact host is now accepted; HTTPS, no credentials and
+the normal HTTPS port are still required. Other subdomains and lookalikes are
+rejected. A fresh bank form was opened for verification without entering card
+details or paying.
+
+Init always persists a validated payment ID even when the URL is missing or
+rejected. Diagnostics retain an accepted/missing/rejected URL flag, never the URL
+itself. Read-only billing audit can also recover the bank ID from a matching,
+successful Init diagnostic.
+
+On an explicit checkout click, a lost initial checkout older than two minutes
+is reconciled through GetState. A paid session grants access through the existing
+idempotent event handler; authorizing, unknown and mismatched sessions are not
+replaced. Only a verified NEW session whose form was never delivered can retire
+its pending subscription and produce a fresh initial checkout. The old bank
+session expires normally, remains available for reconciliation, and cannot cause
+an automatic charge. Current links are reused; Init and Charge claims are never
+reset. Billing cron does not invoke checkout recovery. Pending/error messages
+include a continuation button.
+
+This fixes reconnecting through a payment form. It does not establish the reason
+for the earlier failed recurring Charge or prove a future renewal will succeed.
+The checkout regression suite covers lost-link recovery, concurrency, paid and
+authorizing sessions, mismatched identities, URL rejection and read-only audit.
+The live-date outlook entitlement fixture now uses a current opinion timestamp
+so that unrelated freshness expiration does not make its entitlement test flaky.

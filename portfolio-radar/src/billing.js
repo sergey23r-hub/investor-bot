@@ -24,9 +24,9 @@ export class Billing{
   if(!buy)return this.radar.reply(job,user,text,[[{text:'Согласен: 290 ₽ каждые 7 дней',callback_data:'billing:buy'}]]);
   try{
    const order=await this.bank.checkout(user);
-   if(!order?.payment_url)return this.radar.reply(job,user,'Проверяю статус счёта. Повторно оплачивать не нужно. /subscribe — статус, /paysupport — помощь.');
+   if(!order?.payment_url)return this.radar.reply(job,user,'⏳ <b>Проверяем счёт в Т‑Банке</b>\n\nСсылка пока не готова. Через пару минут нажмите «Продолжить оплату». Если банк уже подтвердил платёж, подписка включится автоматически.',[[{text:'Продолжить оплату',callback_data:'billing:buy'}]]);
    return this.radar.reply(job,user,'💳 <b>Оплата на странице Т‑Банка</b>\n\n290 ₽ за первую неделю; затем автоматически каждые 7 дней. Оставшиеся пробные дни сохраняются. Для автопродления оплатите картой.\n\nДоступ откроется после подтверждения банка. Реквизиты карты вводятся только на странице банка. /unsubscribe — отменить продление.',[[{text:'Оплатить 290 ₽ через Т‑Банк',url:order.payment_url}]],'invoice');
-  }catch(e){return this.radar.reply(job,user,e.message==='subscription_active'?'Подписка уже активна. /subscribe — статус.':'Т‑Банк пока не подтвердил создание счёта. Доступные данные сохранены. /paysupport — помощь с подключением оплаты.');}
+  }catch(e){return this.radar.reply(job,user,e.message==='subscription_active'?'Подписка уже активна. /subscribe — статус.':'Не удалось подготовить ссылку на оплату. Попробуйте продолжить через пару минут. /paysupport — помощь с подключением оплаты.',e.message==='subscription_active'?null:[[{text:'Продолжить оплату',callback_data:'billing:buy'}]]);}
  }
  async checkout(query){
   let ok=false;const id=invoiceId(query.invoice_payload);
@@ -62,4 +62,3 @@ export class Billing{
  }
  async support(job,user){return this.radar.reply(job,user,'💬 <b>Помощь с оплатой</b>\n\nНапишите <a href="https://t.me/romanovsv">@romanovsv</a>: опишите проблему и приложите квитанцию Т‑Банка. Здесь же можно запросить возврат или расчёт партнёрского вознаграждения.\n\n/subscribe — статус · /unsubscribe — отключить продление');}
 }
-

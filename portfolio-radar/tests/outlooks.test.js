@@ -87,7 +87,7 @@ test('queued paid pages are rebuilt against current membership and entitlement w
  const oldFetch=globalThis.fetch;globalThis.fetch=()=>assert.fail('outlook button must be cache-only');
  try{
   const positions=[{...position('A'),observed_value:'100'},{...position('B'),observed_value:'200'}],accounts=[{positions,updated_at:new Date().toISOString()}];
-  const db={get:async t=>t==='pr_accounts'?accounts:[],rpc:async name=>{assert.equal(name,'pr_outlook_latest');return positions.map(a=>({asset_key:a.key,data:{checked_at:new Date().toISOString(),opinions:[opinion('Secret'+a.key)]}}));}};
+  const db={get:async t=>t==='pr_accounts'?accounts:[],rpc:async name=>{assert.equal(name,'pr_outlook_latest');return positions.map(a=>({asset_key:a.key,data:{checked_at:new Date().toISOString(),opinions:[opinion('Secret'+a.key,120,{published_at:new Date().toISOString()})]}}));}};
   const r=new Radar(db);r.billing.access=async()=>free;
   const body=await r.insights.deliveryBody({user_id:42,body:{chat_id:42,text:'previous paid data',_portfolius:{outlook:true,page:0}}});
   assert.doesNotMatch(body.text,/SecretA|previous paid data/);assert.match(body.text,/SecretB/);

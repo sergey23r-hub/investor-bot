@@ -4,7 +4,8 @@ import {TBank,paymentUrl,bankDiagnostic} from '../src/tbank.js';
 import {createHandler} from '../src/app.js';
 test('checkout links accept only HTTPS bank hosts',()=>{
  assert.equal(paymentUrl('https://securepay.tinkoff.ru/test'),'https://securepay.tinkoff.ru/test');
- for(const s of ['http://securepay.tinkoff.ru','https://tinkoff.ru.evil.test','https://user@securepay.tinkoff.ru','javascript:alert(1)'])assert.equal(paymentUrl(s),null);
+ assert.equal(paymentUrl('https://pay.tbank-online.com/test'),'https://pay.tbank-online.com/test');
+ for(const s of ['http://securepay.tinkoff.ru','https://tinkoff.ru.evil.test','https://user@securepay.tinkoff.ru','javascript:alert(1)','https://pay.tbank-online.com.evil.test','https://other.tbank-online.com','https://tbank-online.com','https://evil.pay.tbank-online.com','https://pay.tbank-online.com:8443','https://user:pass@pay.tbank-online.com'])assert.equal(paymentUrl(s),null);
 });
 test('unknown or unauthenticated bank callbacks never grant access',async()=>{
  let writes=0,verifications=0;const radar={db:{get:async()=>[{id:'pr_'+'a'.repeat(32),payment_id:'123'}],rpc:async()=>{writes++;}}};
