@@ -1,0 +1,46 @@
+[
+  {
+    "scope": "research",
+    "asset_key": "sample:MSFT",
+    "model": "gpt-5.4-mini-2026-03-17",
+    "status": "completed",
+    "input_tokens": 17861,
+    "cached_tokens": 0,
+    "output_tokens": 1424,
+    "search_calls": 3,
+    "estimated_usd": 0.049803749999999994
+  },
+  {
+    "scope": "research",
+    "asset_key": "sample:BTC",
+    "model": "gpt-5.4-mini-2026-03-17",
+    "status": "completed",
+    "input_tokens": 9408,
+    "cached_tokens": 4096,
+    "output_tokens": 708,
+    "search_calls": 1,
+    "estimated_usd": 0.0174772
+  },
+  {
+    "scope": "research",
+    "asset_key": "sample:bond",
+    "model": "gpt-5.4-mini-2026-03-17",
+    "status": "completed",
+    "input_tokens": 21314,
+    "cached_tokens": 4096,
+    "output_tokens": 3798,
+    "search_calls": 4,
+    "estimated_usd": 0.0703117
+  },
+  {
+    "scope": "research",
+    "asset_key": "market",
+    "model": "gpt-5.4-mini-2026-03-17",
+    "status": "completed",
+    "input_tokens": 21062,
+    "cached_tokens": 4096,
+    "output_tokens": 4195,
+    "search_calls": 5,
+    "estimated_usd": 0.0819092
+  }
+]
