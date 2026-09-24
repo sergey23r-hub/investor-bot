@@ -445,7 +445,7 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
  const db=dbOverride||new Database(env.SUPABASE_URL,env.SUPABASE_SERVICE_ROLE_KEY);
  return async req=>{
   const path=new URL(req.url).pathname.split('/').filter(Boolean).at(-1),json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
-  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.6.0',status:'running'});
+  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.6.1',status:'running'});
   if(req.method!=='POST')return json({error:'not_found'},404);
   try{
    const radar=new Radar(db,env);await radar.init();
@@ -466,6 +466,11 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
     waitUntil(radar.work().catch(()=>console.error('portfolio_worker_failed')));return json({ok:true});
    }
    if(!timingSafe(req.headers.get('x-portfolio-worker-secret'),radar.config.worker_secret))return json({error:'unauthorized'},401);
+   if(path==='billing-audit'){
+    const raw=await req.text();if(raw.length>200)return json({error:'too_large'},413);
+    let data;try{data=JSON.parse(raw);}catch{return json({error:'invalid_request'},400);}
+    return json(await radar.billing.bank.audit(data?.order_id));
+   }
    if(path==='outlook-work'){waitUntil(radar.outlooks.work().catch(()=>console.error('outlook_worker_failed')));return json({accepted:true});}
    if(path==='billing-work'){waitUntil(Promise.allSettled([radar.billing.bank.work(),radar.insights.maintenance()]).then(async results=>{if(results.some(r=>r.status==='rejected'))console.error('billing_or_lifecycle_pending');await radar.flush();}));return json({accepted:true});}
    if(path==='metrics')return json(await radar.db.rpc('pr_product_metrics'));

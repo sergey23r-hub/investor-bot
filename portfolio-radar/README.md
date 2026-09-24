@@ -191,3 +191,25 @@ apply `database/release_v6/schedule.sql` and refresh Telegram registration metad
 `/admin` includes daily coverage, failed sources and 30-day outlook opens.
 Roll back the app first and unschedule `portfolio-radar-outlooks` if needed;
 existing quote/news/payment workers and their tables are independent.
+
+## 0.6.1 — renewal diagnostics (24 September 2026)
+
+The first weekly renewal was dispatched on schedule and reached the gateway, but
+did not reach CONFIRMED before its payment session expired. The old worker ignored
+the Charge response and subsequent successful GetState requests only returned the
+payment status. Consequently the original bank rejection code cannot be inferred
+from HTTP 200 or DEADLINE_EXPIRED, and the incident does not prove a card decline
+or a terminal configuration error.
+
+The worker now preserves separate allowlisted Init, Charge and GetState results in
+service-only `pr_cache` entries (`tbank:diagnostic:v1:<order>:<method>`, 90 days).
+Only IDs, status, success, amount and numeric error code are stored. Card data,
+RebillId, signatures, payment URLs and raw bank messages/details are excluded.
+A Charge rejection code is retained in the order's last_error through polling and
+expiration; logging failures do not stop reconciliation. Charge is still claimed
+once, and an ambiguous response is reconciled without sending another Charge.
+
+Authenticated POST `/billing-audit` accepts `{ "order_id": "pr_..." }` and performs
+GetState only for an existing Portfolius order. It neither changes access nor
+creates, retries or charges a payment, and sends no Telegram messages. Failed or
+cancelled subscriptions are not automatically reactivated by this endpoint.
