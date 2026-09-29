@@ -16,7 +16,7 @@ export function parseFeed(xml,now=new Date()){
   return [{title:plain(tag(x,'title')).slice(0,300),description:plain(tag(x,'content:encoded')||tag(x,'description')).slice(0,16000),author:plain(tag(x,'a10:name')||tag(x,'dc:creator')||tag(x,'author')).slice(0,100),url,published_at:new Date(published).toISOString(),license:FINAM_LICENSE}];
  }).slice(0,120);
 }
-const aliases={SBER:['Сбербанк'],GAZP:['Газпром'],LKOH:['Лукойл'],YDEX:['Яндекс'],MOEX:['Московская биржа','Мосбиржа'],GMKN:['Норникель'],ROSN:['Роснефть'],NVTK:['Новатэк'],MTSS:['МТС'],SMLT:['Самолет','Самолёт'],MDMG:['Мать и дитя','МД Медикал'],MSFT:['Microsoft','Майкрософт'],TSLA:['Tesla','Тесла'],COIN:['Coinbase'],AAPL:['Apple'],NVDA:['Nvidia'],AMZN:['Amazon'],GOOGL:['Alphabet','Google']};
+const aliases={RAGR:['Русагро','Группа Русагро'],SBER:['Сбербанк'],GAZP:['Газпром'],LKOH:['Лукойл'],YDEX:['Яндекс'],MOEX:['Московская биржа','Мосбиржа'],GMKN:['Норникель'],ROSN:['Роснефть'],NVTK:['Новатэк'],MTSS:['МТС'],SMLT:['Самолет','Самолёт'],MDMG:['Мать и дитя','МД Медикал'],MSFT:['Microsoft','Майкрософт'],TSLA:['Tesla','Тесла'],COIN:['Coinbase'],AAPL:['Apple'],NVDA:['Nvidia'],AMZN:['Amazon'],GOOGL:['Alphabet','Google']};
 const cryptoAliases={bitcoin:['Bitcoin','Биткоин','Биткойн'],ethereum:['Ethereum','Эфириум'],solana:['Solana','Солана']};
 const escape=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 export function assetMention(asset,text){
@@ -100,3 +100,4 @@ export function parseFunding(data,asset,now=new Date()){
  const rate=num(data.lastFundingRate),mark=num(data.markPrice),index=num(data.indexPrice);if(rate===null||!(mark>0&&index>0))return null;
  return {symbol,rate_pct:rate*100,basis_pct:(mark/index-1)*100,as_of:new Date(data.time).toISOString(),next_funding:Number.isFinite(data.nextFundingTime)?new Date(data.nextFundingTime).toISOString():null,source:'https://www.binance.com/en/futures/'+symbol};
 }
+

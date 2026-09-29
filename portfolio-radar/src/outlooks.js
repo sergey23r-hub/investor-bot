@@ -2,6 +2,7 @@ import {OutlookProvider} from './outlook-provider.js';
 import {outlookAssets,largestHolding,outlookBody} from './outlook-format.js';
 import {cachedMarket} from './first-look.js';
 import {newsDay} from './daily.js';
+import {newestQuote} from './outlook-sources.js';
 
 export class Outlooks{
  constructor(radar){this.radar=radar;this.db=radar.db;}
@@ -14,7 +15,7 @@ export class Outlooks{
   access ||= await this.radar.billing.access(user);
   const accounts=await this.radar.insights.accounts(user),assets=outlookAssets(accounts),now=new Date();
   const [records,market]=await Promise.all([this.records(assets),cachedMarket(this.db,assets,now)]);
-  for(const a of assets)if(!market.quotes[a.key]&&records[a.key]?.quote)market.quotes[a.key]=records[a.key].quote;
+  for(const a of assets)market.quotes[a.key]=newestQuote(market.quotes[a.key],records[a.key]?.quote,now);
   market.fx ||= Object.values(records).map(r=>r.fx).filter(f=>f?.status==='ok').sort((a,b)=>String(b.as_of).localeCompare(String(a.as_of)))[0];
   return outlookBody(user,assets,records,largestHolding(accounts,market,now),access,page,now);
  }
@@ -35,7 +36,7 @@ export class Outlooks{
     try{
      const previous=(await this.records([job.asset]))[job.asset_key];
      const provider=new OutlookProvider(this.db),data=await provider.collect(job.asset,previous);
-     await this.db.post('pr_outlook_snapshots',{asset_key:job.asset_key,service_day:job.service_day,data},{on_conflict:'asset_key,service_day'},'resolution=ignore-duplicates,return=minimal');
+     await this.db.post('pr_outlook_snapshots',{asset_key:job.asset_key,service_day:job.service_day,data},{on_conflict:'asset_key,service_day'},'resolution=merge-duplicates,return=minimal');
      await this.db.patch('pr_outlook_jobs',{state:'done',finished_at:new Date().toISOString()},{asset_key:'eq.'+job.asset_key,service_day:'eq.'+job.service_day,state:'eq.running'});
     }catch{
      console.error('outlook_collection_failed');

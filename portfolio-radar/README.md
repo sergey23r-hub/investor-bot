@@ -245,3 +245,50 @@ The checkout regression suite covers lost-link recovery, concurrency, paid and
 authorizing sessions, mismatched identities, URL rejection and read-only audit.
 The live-date outlook entitlement fixture now uses a current opinion timestamp
 so that unrelated freshness expiration does not make its entitlement test flaky.
+
+## 0.7.0 — working forecast coverage (29 September 2026)
+
+The initial collector completed its daily jobs but found zero analyst targets in
+nine days: Finam RSS descriptions were short excerpts, not full target tables.
+The new collector adds two public sources, without API keys or AI requests:
+
+- Stock Analysis / S&P Global: a source-reported US equity consensus, with
+  average, median, range, reported analyst count and source update date. Verified
+  US ISIN, exchange ticker and issuer name must agree. This aggregate is not
+  combined with individual broker opinions to inflate its count. It expires
+  after seven days, independently of the collection timestamp.
+- CoinCodex: the visible free 5-day, 1-month and 3-month algorithmic forecasts
+  for explicitly mapped CoinGecko IDs. They are labeled algorithmic scenarios,
+  never analyst consensus, and expire after two days. Hidden/premium horizons
+  are not parsed. Small token prices retain their precision.
+- Finam: up to two relevant public full articles per uncovered stock/day, in
+  addition to the shared RSS. Explicit target, issuer and analyst attribution
+  are still mandatory. The Rusagro alias now matches its issuer name.
+
+The daily reservation applies to the new sources as well: no user action
+refreshes providers. Failed and denied requests remain cached for the day.
+Format, stale-data and identity failures are visible in source diagnostics.
+Admin coverage separates consensus, individual opinions, models, context and
+unavailable assets. A successful HTTP request alone is not forecast coverage.
+Recent prior source data may be retained after a provider failure, with its
+original update date and expiry. Newer usable MOEX quotes replace older cached
+quotes, and the largest-holding calculation prefers the newest snapshot quote.
+
+The free forecast remains the largest holding across all accounts. Paid/trial
+pages and queued delivery keep their existing entitlement checks. Bonds and
+funds retain their properly labeled yield/macro context; there is no fabricated
+price target when coverage is absent.
+
+Rollout: apply the updated `create or replace function pr_outlook_metrics`
+definition in `database/release_v6/outlooks.sql` through a migration, then deploy
+all runtime files including `src/outlook-sources.js`. No tables, permissions,
+schedules, public refresh endpoints, billing or messaging behavior change.
+An operator can requeue current-day completed outlook jobs for a collector
+upgrade. Snapshots are atomically replaced on completion; source reservations
+remain intact, so already collected sources are not fetched again that day.
+
+Validation: 147 tests, including issuer/currency/date validation, premium-field
+exclusion, source failure/expiry, daily deduplication and free-tier data isolation.
+Real public pages were parsed for MSFT, TSLA, COIN and all seven verified crypto
+holdings. Verify production snapshot/source statuses after deployment; local
+page access alone does not establish server-side provider availability.

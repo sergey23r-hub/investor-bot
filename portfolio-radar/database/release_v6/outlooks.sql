@@ -71,7 +71,7 @@ language sql stable security invoker set search_path='' as $$
  where asset_key=any(p_keys) and service_day between (now() at time zone 'Europe/Moscow')::date-95 and (now() at time zone 'Europe/Moscow')::date
  order by asset_key,service_day desc;
 $$;
-create function public.pr_outlook_metrics() returns jsonb
+create or replace function public.pr_outlook_metrics() returns jsonb
 language sql stable security invoker set search_path='' as $$
  select jsonb_build_object(
  'assets',(select count(*) from public.pr_outlook_jobs where service_day=(now() at time zone 'Europe/Moscow')::date),
@@ -79,6 +79,8 @@ language sql stable security invoker set search_path='' as $$
  'failed',(select count(*) from public.pr_outlook_jobs where service_day=(now() at time zone 'Europe/Moscow')::date and state='failed'),
  'consensus',(select count(*) from public.pr_outlook_snapshots where service_day=(now() at time zone 'Europe/Moscow')::date and data->>'status'='consensus'),
  'opinions',(select count(*) from public.pr_outlook_snapshots where service_day=(now() at time zone 'Europe/Moscow')::date and data->>'status'='opinions'),
+ 'model',(select count(*) from public.pr_outlook_snapshots where service_day=(now() at time zone 'Europe/Moscow')::date and data->>'status'='model'),
+ 'unavailable',(select count(*) from public.pr_outlook_snapshots where service_day=(now() at time zone 'Europe/Moscow')::date and data->>'status'='unavailable'),
  'context',(select count(*) from public.pr_outlook_snapshots where service_day=(now() at time zone 'Europe/Moscow')::date and data->>'status'='context'),
  'opens',(select count(*) from public.pr_product_events where event='outlook_open' and created_at>now()-interval '30 days'),
  'source_failures',(select count(*) from public.pr_outlook_sources where service_day=(now() at time zone 'Europe/Moscow')::date and status='unavailable')

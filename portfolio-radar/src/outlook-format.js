@@ -2,8 +2,10 @@ import {html,safeUrl} from './core.js';
 import {newsIdentity} from './daily.js';
 import {valuation,fullAccess} from './report-format.js';
 import {DAY,FINAM_LICENSE} from './outlook-data.js';
+import {sourceFresh} from './outlook-sources.js';
 
 const n=(x,d=2)=>Number(x).toLocaleString('ru-RU',{maximumFractionDigits:d});
+const price=x=>Number(x).toLocaleString('ru-RU',{maximumSignificantDigits:8});
 const date=s=>new Date(s).toLocaleDateString('ru-RU',{timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',year:'numeric'});
 const link=(url,title)=>safeUrl(url)?'<a href="'+html(url)+'">'+html(title)+'</a>':'';
 export function outlookAssets(accounts){
@@ -28,18 +30,26 @@ export function outlookCard(asset,data,now=new Date()){
  const age=+now-Date.parse(data?.checked_at);
  if(!data||!Number.isFinite(age)||age<0||age>7*DAY){lines.push('Подтверждённых данных пока нет. Проверка источников проходит автоматически.');return lines.join('\n\n');}
  lines.push('<i>Проверено: '+date(data.checked_at)+(age>DAY?' · сохранённые данные':'')+'</i>');
- const c=data.consensus;
+ const opinions=(data.opinions||[]).filter(o=>sourceFresh(o.published_at,now,90*DAY));
+ const saved=data.consensus,c=saved&&(saved.kind==='source_consensus'?sourceFresh(saved.as_of,now,7*DAY):sourceFresh(saved.oldest,now,90*DAY))?saved:null;
+ const model=sourceFresh(data.model_forecast?.as_of,now,2*DAY)?data.model_forecast:null;
  if(c){
-  lines.push('<b>Консенсус доступных оценок</b>\nМедианная цель: '+n(c.median)+' '+html(c.currency)+'\nДиапазон: '+n(c.low)+'–'+n(c.high)+' '+html(c.currency)+'\nНезависимых аналитических домов: '+c.count+'\nГоризонт: '+horizon(c.horizon)+'\nДаты оценок: '+date(c.oldest)+' — '+date(c.latest));
+  const aggregated=c.kind==='source_consensus';
+  lines.push('<b>Консенсус аналитиков</b>\nМедианная цель: '+price(c.median)+' '+html(c.currency)+(aggregated?'\nСредняя цель: '+price(c.mean)+' '+html(c.currency):'')+'\nДиапазон: '+price(c.low)+'–'+price(c.high)+' '+html(c.currency)+'\n'+(aggregated?'Аналитиков по данным источника: ':'Независимых аналитических домов: ')+c.count+'\nГоризонт: '+horizon(c.horizon)+'\n'+(aggregated?'Обновление источника: '+date(c.as_of):'Даты оценок: '+date(c.oldest)+' — '+date(c.latest)));
   const q=data.quote,qa=+now-Date.parse(q?.as_of);
   // Never compare a USD target with a RUB quote, a bond percentage or a token derivative.
   if(q?.status==='ok'&&q.currency===c.currency&&Number(q.price)>0&&qa>=0&&qa<=7*DAY)lines.push('Отклонение цели от цены '+n(q.price)+' '+html(q.currency)+' ('+date(q.as_of)+'): '+n((c.median/q.price-1)*100)+'%. Дивиденды не учтены.');
   lines.push(c.sources.slice(0,6).map(o=>link(o.url,o.house+' · '+date(o.published_at))).join(' · '));
- }else if(data.opinions?.length){
+ }else if(opinions.length){
   lines.push('<b>Отдельные оценки аналитиков</b>\nСопоставимых независимых оценок пока недостаточно для консенсуса.');
-  lines.push(data.opinions.slice(0,3).map(o=>link(o.url,o.house)+' · '+n(o.target)+' '+html(o.currency)+'\n'+horizon(o.horizon)+' · '+date(o.published_at)).join('\n\n'));
+  lines.push(opinions.slice(0,3).map(o=>link(o.url,o.house)+' · '+price(o.target)+' '+html(o.currency)+'\n'+horizon(o.horizon)+' · '+date(o.published_at)).join('\n\n'));
  }else lines.push('Сопоставимых прогнозов аналитиков в подключённых открытых источниках пока нет.');
- if(c||data.opinions?.length)lines.push('<i>Факты извлечены автоматически из публикаций Финам. '+link(FINAM_LICENSE,'CC BY 4.0')+'. Это выборка доступных оценок, не весь рынок.</i>');
+ if(c?.kind==='source_consensus')lines.push('<i>Готовая сводка S&amp;P Global через Stock Analysis. Число аналитиков приведено источником; это не наша проверка независимости каждого участника.</i>');
+ else if(c||opinions.length)lines.push('<i>Факты извлечены автоматически из публикаций Финам. '+link(FINAM_LICENSE,'CC BY 4.0')+'. Это выборка доступных оценок, не весь рынок.</i>');
+ if(model){
+  const labels={'5-Day':'Через 5 дней','1-Month':'Через 1 месяц','3-Month':'Через 3 месяца'};
+  lines.push('<b>Алгоритмический прогноз · CoinCodex</b>\n'+model.targets.slice(0,3).map(t=>html(labels[t.horizon]||t.horizon)+': '+price(t.target)+' '+html(model.currency)).join('\n')+'\n'+link(model.url,'Источник · '+date(model.as_of))+'\nГоризонты отсчитываются от даты модели. Это расчёт алгоритма по историческим данным, не консенсус аналитиков. Сценарий может существенно измениться.');
+ }
  if(asset.kind==='bond'){
   const b=data.bond;
   if(b){const rows=[];if(b.yield!==null){const type=b.yield_type==='MATDATE'?'к погашению':b.yield_type==='OFFER'?'к оферте':'к расчётной дате биржи';rows.push('Эффективная доходность '+type+': '+n(b.yield)+'%'+(b.yield_date?' · '+date(b.yield_date):''));}if(b.coupon_pct!==null)rows.push('Текущая ставка купона: '+n(b.coupon_pct)+'%');if(b.maturity)rows.push('Погашение: '+date(b.maturity));if(rows.length)lines.push('<b>Параметры выпуска · '+link(b.source,'Мосбиржа')+'</b>\n'+rows.join('\n')+(b.as_of?'\nТорги: '+date(b.as_of):'')+'\nДоходность — расчёт по цене и денежным потокам, не прогноз и не гарантия выплат.');}
@@ -54,7 +64,7 @@ export function outlookCard(asset,data,now=new Date()){
   const pairs=macro.rates.slice(0,2).map(x=>x.year+': '+n(x.value)+'%');
   lines.push('<b>Макроконсенсус · российский рынок</b>\nСредняя ключевая ставка за год — '+pairs.join('; ')+'.'+(macro.inflation?.length?'\nИнфляция, декабрь к декабрю '+macro.inflation[0].year+': '+n(macro.inflation[0].value)+'%.':'')+((asset.provider==='cash'||asset.kind==='currency')&&macro.usd?.length?'\nСредний USD/RUB за '+macro.usd[0].year+': '+n(macro.usd[0].value)+' ₽.':'')+'\n'+link(macro.source,'Опрос Банка России · '+macro.as_of.slice(0,7))+(macro.count?' · '+macro.count+' экономиста':'')+'\nЭто медианы ответов участников опроса; среднегодовые значения отличаются от значений на конец года.');
  }
- if(!c&&!data.opinions?.length&&asset.kind==='stock')lines.push('Здесь появятся цель, горизонт, разброс и авторы после появления подтверждённых публикаций. Отсутствие оценки не означает рекомендацию держать или продавать.');
+ if(!c&&!opinions.length&&asset.kind==='stock')lines.push('Здесь появятся цель, горизонт, разброс и авторы после появления подтверждённых публикаций. Отсутствие оценки не означает рекомендацию держать или продавать.');
  lines.push('<i>Прогнозы могут не сбыться. Оценки источников не являются персональной рекомендацией Portfolius.</i>');
  return lines.join('\n\n');
 }
@@ -63,6 +73,7 @@ export function outlookBody(user,assets,records,selection,access,page=0,now=new 
  const size=full?1:6,pages=Math.max(1,Math.ceil(sorted.length/size));
  if(!Number.isSafeInteger(page)||page<0||page>=pages)page=0;
  const shown=sorted.slice(page*size,(page+1)*size),lines=['<b>🔭 Portfolius · прогнозы и ориентиры</b>'];
+ if(pages>1)lines.push('<i>Страница '+(page+1)+' из '+pages+'</i>');
  if(!assets.length)lines.push('Сначала добавьте портфель: пришлите скриншоты и подтвердите позиции.');
  else if(!full){lines.push('Бесплатно — крупнейший актив по стоимости позиции во всех счетах. Остальные — в подписке.');if(!freeKey)lines.push('Пока не хватает данных, чтобы сравнить стоимость всех позиций. Проверьте количество и валюты через /edit или загрузите свежий скриншот. Рыночные данные проверяются автоматически.');else if(selection.approximate)lines.push('<i>Выбор приблизительный: часть стоимости взята из последнего сохранённого скриншота.</i>');}
  for(const asset of shown){if(full||asset.key===freeKey)lines.push(outlookCard(asset,records[asset.key],now));else lines.push('🔒 <b>'+html(String(asset.name||asset.symbol||'Актив').slice(0,110))+'</b>\nПрогнозы и ориентиры по этому активу — в подписке.');}
