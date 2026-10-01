@@ -6,6 +6,7 @@ import {entitledPortfolio,upgradeOffer} from './freemium.js';
 import {dailyResearchKey,quoteCacheKey} from './daily.js';
 import {Insights} from './insights.js';
 import {Outlooks} from './outlooks.js';
+import {Pools} from './pools.js';
 import {cachedMarket,rememberQuote,fxCacheKey} from './first-look.js';
 import {BOT_NAME,BOT_DESCRIPTION,BOT_SHORT_DESCRIPTION,welcomeScreen,uploadScreen,exampleScreen,helpScreen} from './onboarding.js';
 export class Database{
@@ -24,7 +25,7 @@ export class Database{
  rpc(name,body={}){return this.request('rpc/'+name,{method:'POST',body});}
 }
 export class Radar{
- constructor(db,env={}){this.db=db;this.env=env;this.billing=new Billing(this);this.insights=new Insights(this);this.outlooks=new Outlooks(this);}
+ constructor(db,env={}){this.db=db;this.env=env;this.billing=new Billing(this);this.insights=new Insights(this);this.outlooks=new Outlooks(this);this.pools=new Pools(this);}
  async init(){
   this.config=await this.db.rpc('pr_config');
   // Dedicated names avoid accidentally repurposing an existing Telegram bot.
@@ -112,6 +113,7 @@ export class Radar{
  }
  async showScreen(job,user,screen){
   const view=screen==='upload'?uploadScreen():screen==='example'?exampleScreen():screen==='help'?helpScreen():welcomeScreen(await this.billing.access(user.chat_id));
+  if(!['upload','example','help'].includes(screen)){view.text+='\n\n'+await this.pools.teaser();await this.pools.event(user.chat_id,'teaser',job.id);}
   return this.reply(job,user.chat_id,view.text,view.keyboard);
  }
  async beginExtraction(job,user,expectedImport=null){
@@ -129,7 +131,10 @@ export class Radar{
   const id=cb?.from?.id||msg?.from?.id;
   if(!Number.isSafeInteger(id)||id<=0||msg?.chat?.type!=='private'||msg.chat.id!==id)return;
   const user=await this.user(id);job.user_id=id;await this.db.patch('pr_jobs',{user_id:id},{id:'eq.'+job.id});
-  const ref=String(msg?.text||'').trim().match(/^\/start(?:@\w+)?\s+ref_([0-9a-f]{32})$/i)?.[1]||null;
+  const startText=String(msg?.text||'').trim();
+  const ref=startText.match(/^\/start(?:@\w+)?\s+ref_([0-9a-f]{32})$/i)?.[1]||null;
+  const yieldRef=startText.match(/^\/start(?:@\w+)?\s+yr_(\d+)$/i)?.[1]||null;
+  if(yieldRef&&yieldRef===String(id))await this.db.patch('pr_users',{yield_radar_ref:yieldRef},{chat_id:'eq.'+id});
   await this.billing.touch(id,ref);
   if(msg.successful_payment||msg.refunded_payment)return this.billing.payment(job,id,msg);
   if(cb){
@@ -137,6 +142,7 @@ export class Radar{
    await this.telegram('answerCallbackQuery',{callback_query_id:cb.id}).catch(()=>{});
    const [action,ref,rowIndex,pageText]=String(cb.data||'').split(':');
    if(action!=='insight'||ref!=='ask')await this.insights.clearQuestion(id);
+   if(action==='lp')return this.pools.callback(job,id,ref,rowIndex,pageText);
    if(action==='report')return this.insights.open(job,id,ref,rowIndex,Number(pageText||0));
    if(action==='insight'){
     if(ref==='outlook')return this.outlooks.open(job,id,Number(rowIndex||0));
@@ -168,6 +174,11 @@ export class Radar{
     const r=await this.db.rpc('pr_commit',{p_import:imp.id,p_user:id,p_allow_unresolved:action==='save_notes'});
     await this.billing.access(id,true);
     if(r.already_committed)return this.reply(job,id,'Этот портфель уже сохранён. /report — готовый обзор.');
+    const fresh=(await this.db.get('pr_users',{chat_id:'eq.'+id,limit:1}))[0];
+    if(fresh?.yield_radar_ref&&!fresh?.yield_radar_converted_at){
+      const conversion=fetch('https://yield-radar-bo7y.vercel.app/api/portfolius-converted',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({user_id:String(id),source_user_id:String(fresh.yield_radar_ref)}),signal:AbortSignal.timeout(5000)}).then(async x=>{if(x.ok)await this.db.patch('pr_users',{yield_radar_converted_at:new Date().toISOString()},{chat_id:'eq.'+id});}).catch(()=>{});
+      await conversion;
+    }
     return this.insights.afterSave(job,user);
    }
    if(!['uploading','preview'].includes(imp.status))return this.reply(job,id,'Загрузка уже обработана или обрабатывается.');
@@ -178,6 +189,7 @@ export class Radar{
   const file=extractFile(msg);
   if(file){
    await this.insights.clearQuestion(id);
+   const poolImport=await this.pools.current(id);if(poolImport)return this.pools.file(job,id,file,poolImport);
    let imp=await this.currentImport(id);
    if(imp&&imp.status!=='uploading')return this.reply(job,id,'Предыдущая загрузка ещё открыта. Сохраните или отмените её кнопкой; /cancel — отменить.');
    if(!imp){
@@ -194,6 +206,8 @@ export class Radar{
   const text=String(msg.text||'').trim(),[command,...args]=text.split(/\s+/);const cmd=command?.split('@')[0].toLowerCase();
   if(cmd?.startsWith('/')&&cmd!=='/ask')await this.insights.clearQuestion(id);
   if(cmd==='/report')return this.insights.open(job,id);
+  if(cmd==='/pools')return this.pools.open(job,id);
+  if(cmd==='/poolfix')return this.pools.correction(job,id,text);
   if(cmd==='/outlook'||cmd==='/forecasts')return this.outlooks.open(job,id);
   if(cmd==='/week')return this.insights.week(job,id);
   if(cmd==='/archive')return this.insights.archive(job,id);
@@ -209,8 +223,8 @@ export class Radar{
   if(cmd==='/paysupport')return this.billing.support(job,id);
   if(cmd==='/start'||/^(?:начать|старт|start|🚀 начать)$/iu.test(text)){await this.insights.clearQuestion(id);await this.insights.event(id,'start',job.id);return this.showScreen(job,user,'home');}
   if(cmd==='/help')return this.showScreen(job,user,'help');
-  if(cmd==='/cancel'){await this.insights.clearQuestion(id);const imp=await this.currentImport(id);if(imp)await this.db.patch('pr_imports',{status:'cancelled',files:[]},{id:'eq.'+imp.id});return this.reply(job,id,'Загрузка отменена.');}
-  if(cmd==='/done')return this.beginExtraction(job,user);
+  if(cmd==='/cancel'){await this.insights.clearQuestion(id);await this.pools.cancel(id);const imp=await this.currentImport(id);if(imp)await this.db.patch('pr_imports',{status:'cancelled',files:[]},{id:'eq.'+imp.id});return this.reply(job,id,'Загрузка отменена.');}
+  if(cmd==='/done'){const imp=await this.pools.current(id);return imp?this.pools.begin(job,id,imp):this.beginExtraction(job,user);}
   if(cmd==='/account'){
    const name=args.join(' ').slice(0,60);const all=await this.db.get('pr_accounts',{user_id:'eq.'+id,order:'created_at.asc'.replace('created_at','updated_at')});
    if(!name)return this.reply(job,id,'Ваши счета: '+all.map(a=>html(a.name)).join(', ')+'.\n\nВыбрать или создать: /account Название');
@@ -237,29 +251,35 @@ export class Radar{
   }
   if(cmd==='/delete')return this.reply(job,id,'Удалить ваши счета, позиции, историю, загрузки и остановить рассылку? Это действие нельзя отменить.',[[{text:'Удалить мои данные',callback_data:'forget:yes'}]]);
   if(text&&!text.startsWith('/')){
+   if(await this.pools.current(id))return this.radarPoolHint(job,id);
    if(await this.insights.pendingQuestion(id)){await this.insights.clearQuestion(id);return this.insights.ask(job,id,text);}
    return this.handleCorrection(job,user,text);
   }
   return this.reply(job,id,'Неизвестная команда. /edit — исправить позиции, /time — время сводки, /help — помощь.');
  }
+ async radarPoolHint(job,id){return this.reply(job,id,'Открыта загрузка LP-позиций. /done — распознать скриншоты; исправить список: <code>/poolfix 1 сумма=1000</code>. /cancel — отменить.');}
+ async downloadImages(files){
+  if(!Array.isArray(files)||files.length>LIMITS.images)throw Error('too_many_images');
+  const buffers=[];let total=0;
+  for(let i=0;i<files.length;i+=4){
+   const chunk=await Promise.all(files.slice(i,i+4).map(async file=>{
+    const f=await this.telegram('getFile',{file_id:file.file_id});if(f.file_size>LIMITS.bytes)throw new Error('image_too_large');
+    if(!/^[a-zA-Z0-9_./-]+$/.test(f.file_path)||f.file_path.includes('..'))throw new Error('invalid_file_path');
+    const r=await fetch(`https://api.telegram.org/file/bot${this.config.telegram_token}/${f.file_path}`,{signal:AbortSignal.timeout(12000)});if(!r.ok)throw new Error('image_download_failed');
+    const bytes=new Uint8Array(await r.arrayBuffer());if(bytes.length>LIMITS.bytes)throw new Error('image_too_large');return {bytes,mime:file.mime};
+   }));
+   for(const f of chunk){total+=f.bytes.length;if(total>16*1024*1024)throw new Error('images_total_too_large');buffers.push(f);}
+  }
+  return buffers.map(({bytes,mime})=>{let binary='';for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode(...bytes.subarray(i,i+8192));return `data:${mime};base64,`+btoa(binary);});
+ }
  async handleExtract(job){
+  if(job.payload.pool_import_id)return this.pools.extract(job);
   if(!await this.billing.require(job,job.user_id)){await this.db.patch('pr_imports',{status:'uploading'},{id:'eq.'+job.payload.import_id,status:'eq.processing'});return;}
   const imp=(await this.db.get('pr_imports',{id:'eq.'+job.payload.import_id,user_id:'eq.'+job.user_id}))[0];
   if(!imp||imp.status==='cancelled'||imp.status==='committed')return;
   if(imp.status==='preview')return this.preview(job,job.user_id,imp);
   if(!job.payload.parsed){
-   const buffers=[];let total=0;
-   for(let i=0;i<imp.files.length;i+=4){
-    const chunk=await Promise.all(imp.files.slice(i,i+4).map(async file=>{
-     const f=await this.telegram('getFile',{file_id:file.file_id});if(f.file_size>LIMITS.bytes)throw new Error('image_too_large');
-     if(!/^[a-zA-Z0-9_./-]+$/.test(f.file_path)||f.file_path.includes('..'))throw new Error('invalid_file_path');
-     const r=await fetch(`https://api.telegram.org/file/bot${this.config.telegram_token}/${f.file_path}`,{signal:AbortSignal.timeout(12000)});if(!r.ok)throw new Error('image_download_failed');
-     const bytes=new Uint8Array(await r.arrayBuffer());if(bytes.length>LIMITS.bytes)throw new Error('image_too_large');
-     return {bytes,mime:file.mime};
-    }));
-    for(const f of chunk){total+=f.bytes.length;if(total>16*1024*1024)throw new Error('images_total_too_large');buffers.push(f);}
-   }
-   const images=buffers.map(({bytes,mime})=>{let binary='';for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode(...bytes.subarray(i,i+8192));return `data:${mime};base64,`+btoa(binary);});
+   const images=await this.downloadImages(imp.files);
    const parsed=await extractPortfolio(images,this.config.openai_key,record=>this.recordUsage(record,job.user_id));
    if(parsed.positions.length>LIMITS.rows)throw new Error('too_many_positions');
    job.payload.parsed=parsed;job.payload.resolved=[];
@@ -407,7 +427,7 @@ export class Radar{
      if(!retry&&job.payload.initial===true)await this.db.patch('pr_initial_reports',{state:'failed',finished_at:new Date().toISOString()},{user_id:'eq.'+job.user_id,job_id:'eq.'+job.id});
      if(!retry&&job.user_id){
       if(job.payload.message?.successful_payment||job.payload.message?.refunded_payment){await this.reply(job,job.user_id,'Telegram прислал информацию об оплате, но обработка задержалась. Повторно оплачивать не нужно. /paysupport — помощь.',null,'payment_error');count++;await this.flush();continue;}
-      if(job.kind==='extract')await this.db.patch('pr_imports',{status:'uploading'},{id:'eq.'+job.payload.import_id,status:'eq.processing'});
+      if(job.kind==='extract')await this.db.patch(job.payload.pool_import_id?'pr_lp_imports':'pr_imports',{status:'uploading'},{id:'eq.'+(job.payload.pool_import_id||job.payload.import_id),status:'eq.processing'});
       const quota=['openai_credit_balance_exhausted','openai_insufficient_quota'].includes(e.message);
       if(quota||job.kind==='extract'&&e.message==='http_429'){
        const owner=job.user_id===Number(this.env.PORTFOLIO_OWNER_CHAT||85572233);
@@ -430,7 +450,7 @@ export class Radar{
   const current=await this.telegram('getWebhookInfo',{});const target=base.replace(/\/$/,'')+'/webhook';
   if(current.url&&current.url!==target)throw new Error('bot_already_connected_elsewhere');
   await this.telegram('setWebhook',{url:target,secret_token:this.config.webhook_secret,allowed_updates:['message','callback_query','pre_checkout_query'],max_connections:10,drop_pending_updates:false});
-  await this.telegram('setMyCommands',{commands:[{command:'start',description:'Главный экран Portfolius'},{command:'help',description:'Как пользоваться Portfolius'},{command:'done',description:'Распознать загруженные скриншоты'},{command:'report',description:'Открыть готовый обзор'},{command:'outlook',description:'Прогнозы и ориентиры по активам'},{command:'week',description:'Итоги недели'},{command:'calendar',description:'Календарь событий и выплат'},{command:'structure',description:'Структура портфеля'},{command:'archive',description:'Архив обзоров'},{command:'ask',description:'Задать вопрос по портфелю'},{command:'learn',description:'Объяснение терминов'},{command:'portfolio',description:'Мои позиции'},{command:'edit',description:'Исправить позицию'},{command:'subscribe',description:'Моя подписка'},{command:'referral',description:'Пригласить друзей'},{command:'unsubscribe',description:'Отключить продление'},{command:'paysupport',description:'Помощь с оплатой'},{command:'terms',description:'Условия подписки'},{command:'account',description:'Выбрать счёт'},{command:'time',description:'Время ежедневной сводки'},{command:'pause',description:'Остановить рассылку'},{command:'resume',description:'Включить рассылку'},{command:'cancel',description:'Отменить загрузку'},{command:'delete',description:'Удалить мои данные'}]});
+  await this.telegram('setMyCommands',{commands:[{command:'start',description:'Главный экран Portfolius'},{command:'help',description:'Как пользоваться Portfolius'},{command:'done',description:'Распознать загруженные скриншоты'},{command:'report',description:'Открыть готовый обзор'},{command:'outlook',description:'Прогнозы и ориентиры по активам'},{command:'pools',description:'Доходность пулов xStocks / USDC'},{command:'week',description:'Итоги недели'},{command:'calendar',description:'Календарь событий и выплат'},{command:'structure',description:'Структура портфеля'},{command:'archive',description:'Архив обзоров'},{command:'ask',description:'Задать вопрос по портфелю'},{command:'learn',description:'Объяснение терминов'},{command:'portfolio',description:'Мои позиции'},{command:'edit',description:'Исправить позицию'},{command:'subscribe',description:'Моя подписка'},{command:'referral',description:'Пригласить друзей'},{command:'unsubscribe',description:'Отключить продление'},{command:'paysupport',description:'Помощь с оплатой'},{command:'terms',description:'Условия подписки'},{command:'account',description:'Выбрать счёт'},{command:'time',description:'Время ежедневной сводки'},{command:'pause',description:'Остановить рассылку'},{command:'resume',description:'Включить рассылку'},{command:'cancel',description:'Отменить загрузку'},{command:'delete',description:'Удалить мои данные'}]});
   for(const language_code of ['', 'ru']){
    await this.telegram('setMyName',{name:BOT_NAME,language_code});
    await this.telegram('setMyDescription',{description:BOT_DESCRIPTION,language_code});
@@ -445,7 +465,7 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
  const db=dbOverride||new Database(env.SUPABASE_URL,env.SUPABASE_SERVICE_ROLE_KEY);
  return async req=>{
   const path=new URL(req.url).pathname.split('/').filter(Boolean).at(-1),json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
-  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.7.0',status:'running'});
+  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.8.0',status:'running'});
   if(req.method!=='POST')return json({error:'not_found'},404);
   try{
    const radar=new Radar(db,env);await radar.init();
@@ -472,6 +492,8 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
     return json(await radar.billing.bank.audit(data?.order_id));
    }
    if(path==='outlook-work'){waitUntil(radar.outlooks.work().catch(()=>console.error('outlook_worker_failed')));return json({accepted:true});}
+   if(path==='pools-work'){waitUntil(radar.pools.work().catch(()=>console.error('lp_worker_failed')));return json({accepted:true});}
+   if(path==='pools-metrics')return json(await radar.db.rpc('pr_lp_metrics'));
    if(path==='billing-work'){waitUntil(Promise.allSettled([radar.billing.bank.work(),radar.insights.maintenance()]).then(async results=>{if(results.some(r=>r.status==='rejected'))console.error('billing_or_lifecycle_pending');await radar.flush();}));return json({accepted:true});}
    if(path==='metrics')return json(await radar.db.rpc('pr_product_metrics'));
    if(path==='billing-probe')return json(await radar.billing.bank.gateway('Status'));
@@ -483,4 +505,3 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
   }catch{console.error('portfolio_request_failed');return json({error:'processing_failed'},500);}
  };
 }
-

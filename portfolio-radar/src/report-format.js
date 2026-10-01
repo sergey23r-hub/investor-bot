@@ -204,3 +204,4 @@ export function weeklySnapshot(reports){
  }
  return {...latest,news,week_change,days_count:new Set(sorted.map(r=>r.service_day)).size,period_from:sorted[0].service_day,previous_story_ids:[]};
 }
+

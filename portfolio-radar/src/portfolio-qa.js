@@ -29,3 +29,5 @@ export async function answerPortfolioQuestion(question,snapshot,key,onUsage=asyn
  if(!data.answer?.trim())throw new Error('answer_empty');
  return html(data.answer.slice(0,6000))+(used.length?'\n\n'+used.map((id,i)=>`<a href="${html(sources[id])}">Источник ${i+1}</a>`).join(' · '):'');
 }
+
+

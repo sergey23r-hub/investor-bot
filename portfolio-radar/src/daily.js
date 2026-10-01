@@ -12,3 +12,5 @@ export function newsDay(now=new Date()){
 }
 export function dailyResearchKey(asset,now=new Date()){return 'research:daily:v1:'+newsDay(now)+':'+newsIdentity(asset);}
 export function quoteCacheKey(asset,now=new Date()){return 'quote:v1:'+asset.key+':'+Math.floor(+now/(15*60000));}
+
+

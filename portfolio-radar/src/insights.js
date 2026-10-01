@@ -4,6 +4,7 @@ import {newsDay} from './daily.js';
 import {cachedMarket} from './first-look.js';
 import {fullAccess,filterSnapshot,stories,storyId,reportPages,reportKeyboard,weeklySnapshot,dateLabel} from './report-format.js';
 import {answerPortfolioQuestion} from './portfolio-qa.js';
+import {LP_BUTTON} from './lp-format.js';
 
 const validId=s=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s||'');
 const reportSections=new Set(['summary','assets','news','calendar','market','structure']);
@@ -53,7 +54,9 @@ export class Insights{
   const pages=reportPages(report,snapshot,section,access);
   if(!Number.isInteger(page)||page<0||page>=pages.length)return null;
   const keyboard=snapshot.empty_portfolio?[[{text:'📸 Добавить позиции',callback_data:'ui:upload'},{text:'Главный экран',callback_data:'ui:home'}]]:reportKeyboard(report.id,section,access,page,pages.length);
-  return {chat_id:user,text:pages[page],parse_mode:'HTML',link_preview_options:{is_disabled:true},reply_markup:{inline_keyboard:keyboard}};
+  let text=pages[page];
+  if(section==='summary'&&page===0){const offer=await this.radar.pools.teaser();if(text.length+offer.length<3900)text+='\n\n'+offer;keyboard.push(LP_BUTTON);}
+  return {chat_id:user,text,parse_mode:'HTML',link_preview_options:{is_disabled:true},reply_markup:{inline_keyboard:keyboard}};
  }
  async sendReport(job,user,report,section='summary',page=0,{automatic=false}={}){
   const access=await this.radar.billing.access(user),body=await this.body(user,report,section,page,access);
@@ -168,6 +171,7 @@ export class Insights{
   const {_portfolius:guard,...body}=row.body;if(!guard)return body;
   if(body.chat_id!==row.user_id)return null;
   const access=await this.radar.billing.access(row.user_id);
+  if(guard.pools||guard.lp_preview)return this.radar.pools.deliveryBody(row,guard,access);
   if(guard.outlook)return this.radar.outlooks.body(row.user_id,guard.page,access);
   if(guard.notice){if(guard.notice==='trial_ending'&&access.tier!=='trial'||guard.notice==='trial_ended'&&access.tier!=='free')return null;return body;}
   if(guard.requires_full&&!fullAccess(access))return {...body,text:'Полный доступ закончился. Ответы по портфелю доступны в подписке. /subscribe — подключение.'};
@@ -178,13 +182,14 @@ export class Insights{
   return body;
  }
  async delivered(row){
+  if(row.body._portfolius?.pools&&row.body._portfolius.automatic)await this.radar.pools.event(row.user_id,row.body._portfolius.lp_kind==='alert'?'alert':'daily',row.dedup_key);
   const g=row.body._portfolius;if(g?.report_id&&g.automatic)await this.event(row.user_id,g.kind==='weekly'?'weekly_delivered':g.kind==='first'?'initial_delivered':'report_delivered',g.report_id);
  }
  async maintenance(){return this.db.rpc('pr_insights_maintenance');}
  async admin(job,user){
   if(user!==Number(this.radar.env.PORTFOLIO_OWNER_CHAT||85572233))return this.radar.reply(job,user,'Эта команда доступна владельцу бота.');
-  const m=await this.db.rpc('pr_product_metrics'),outlook=await this.db.rpc('pr_outlook_metrics'),usd=n=>Number(n||0).toFixed(3);
-  return this.radar.reply(job,user,`<b>📈 Portfolius · показатели за 30 дней</b>\n\nНовые пользователи: ${m.new_users}\nЗагрузили скриншоты: ${m.upload_users}\nУвидели предпросмотр: ${m.preview_users}\nСохранили портфель: ${m.saved_users}\nПервый обзор подготовлен: ${m.initial_ready_users}\nПолучили первый обзор: ${m.initial_delivered_users}\nПолучили любой обзор: ${m.delivered_users}\nОткрыли подробности: ${m.opened_users}\nВпервые оплатили: ${m.new_payers}\nАктивных платных: ${m.active_paid}\n\n<b>Первый опыт</b>\nАктивов с готовыми новостями и котировкой: ${m.initial_cached_assets} из ${m.initial_total_assets}.\n\n<b>Прогнозы и ориентиры · сегодня</b>\nОбработано активов: ${outlook.done} из ${outlook.assets}\nКонсенсус: ${outlook.consensus}; отдельные оценки: ${outlook.opinions}\nМодельные прогнозы: ${outlook.model||0}\nРыночный контекст: ${outlook.context}; без данных: ${outlook.unavailable||0}\nОшибок заданий: ${outlook.failed}; недоступных источников: ${outlook.source_failures}\nОткрытий раздела за 30 дней: ${outlook.opens}\n\n<b>Повторная оплата</b>\n${m.renewed_users} из ${m.renewal_cohort} пользователей, у которых прошло 7 дней с первой оплаты.\n\n<b>Деньги и API</b>\nПодтверждённые оплаты минус возвраты: ${m.net_receipts_rub} ₽\nОценка расходов ИИ: $${usd(m.ai_estimated_usd)}\nОбщие новости: $${usd(m.ai_shared_usd)}\nИндивидуальные запросы: $${usd(m.ai_direct_usd)}\nНа получателя обзоров в среднем: ${m.api_cost_per_served_user_usd===null?'пока нет данных':'$'+usd(m.api_cost_per_served_user_usd)}\n\nВопросов: ${m.qa_requests}\nПроблем с доставкой за 7 дней: ${m.failed_deliveries}\n\n<i>Доставка не означает прочтение. События использования считаются с версии 0.4, этапы первой загрузки — с 0.5; платежи и API — по имеющейся истории. Расходы ИИ оценочные, без комиссии банка, партнёрских выплат и инфраструктуры; это не расчёт прибыли.</i>`);
+  const m=await this.db.rpc('pr_product_metrics'),outlook=await this.db.rpc('pr_outlook_metrics'),lp=await this.db.rpc('pr_lp_metrics'),usd=n=>Number(n||0).toFixed(3);
+  return this.radar.reply(job,user,`<b>📈 Portfolius · показатели за 30 дней</b>\n\nНовые пользователи: ${m.new_users}\nЗагрузили скриншоты: ${m.upload_users}\nУвидели предпросмотр: ${m.preview_users}\nСохранили портфель: ${m.saved_users}\nПервый обзор подготовлен: ${m.initial_ready_users}\nПолучили первый обзор: ${m.initial_delivered_users}\nПолучили любой обзор: ${m.delivered_users}\nОткрыли подробности: ${m.opened_users}\nВпервые оплатили: ${m.new_payers}\nАктивных платных: ${m.active_paid}\n\n<b>Первый опыт</b>\nАктивов с готовыми новостями и котировкой: ${m.initial_cached_assets} из ${m.initial_total_assets}.\n\n<b>Прогнозы и ориентиры · сегодня</b>\nОбработано активов: ${outlook.done} из ${outlook.assets}\nКонсенсус: ${outlook.consensus}; отдельные оценки: ${outlook.opinions}\nМодельные прогнозы: ${outlook.model||0}\nРыночный контекст: ${outlook.context}; без данных: ${outlook.unavailable||0}\nОшибок заданий: ${outlook.failed}; недоступных источников: ${outlook.source_failures}\nОткрытий раздела за 30 дней: ${outlook.opens}\n\n<b>LP-пулы xStocks / USDC</b>\nСохранили пулы: ${lp.profiles}; активов в мониторинге: ${lp.tracked_assets}\nСвежих замеров комиссий: ${lp.comparable_pools}; ошибок источников за 24 ч: ${lp.failed_sources_24h}\nОткрытий: ${lp.events_30d?.open||0}; переходов к оплате: ${lp.events_30d?.upgrade||0}\n\n<b>Повторная оплата</b>\n${m.renewed_users} из ${m.renewal_cohort} пользователей, у которых прошло 7 дней с первой оплаты.\n\n<b>Деньги и API</b>\nПодтверждённые оплаты минус возвраты: ${m.net_receipts_rub} ₽\nОценка расходов ИИ: $${usd(m.ai_estimated_usd)}\nОбщие новости: $${usd(m.ai_shared_usd)}\nИндивидуальные запросы: $${usd(m.ai_direct_usd)}\nНа получателя обзоров в среднем: ${m.api_cost_per_served_user_usd===null?'пока нет данных':'$'+usd(m.api_cost_per_served_user_usd)}\n\nВопросов: ${m.qa_requests}\nПроблем с доставкой за 7 дней: ${m.failed_deliveries}\n\n<i>Доставка не означает прочтение. События использования считаются с версии 0.4, этапы первой загрузки — с 0.5; платежи и API — по имеющейся истории. Расходы ИИ оценочные, без комиссии банка, партнёрских выплат и инфраструктуры; это не расчёт прибыли.</i>`);
  }
  async learn(job,user){
   return this.radar.reply(job,user,'<b>📚 Коротко об инвестиционных событиях</b>\n\n<b>Купон</b> — процентная выплата по облигации. При плавающей ставке будущая сумма может быть неизвестна.\n\n<b>Оферта</b> — возможность или условие досрочного выкупа облигации. Порядок участия зависит от условий выпуска и брокера.\n\n<b>Амортизация</b> — возврат части номинала облигации. Это возврат капитала, а не купонный доход.\n\n<b>Дивидендная отсечка</b> — дата определения владельцев, имеющих право на выплату. Это не дата поступления денег; учитывайте срок расчётов при покупке.\n\n<b>Разблокировка токенов</b> — снятие ограничений на обращение части токенов. Увеличение доступного предложения не гарантирует падение цены.\n\n<b>Концентрация</b> — большая доля портфеля в одном активе, эмитенте или секторе. Связанные активы могут двигаться одновременно.',[[{text:'📊 Мой обзор',callback_data:'insight:report'},{text:'💬 Вопрос',callback_data:'insight:ask'}]]);

@@ -101,3 +101,4 @@ export function parseFunding(data,asset,now=new Date()){
  return {symbol,rate_pct:rate*100,basis_pct:(mark/index-1)*100,as_of:new Date(data.time).toISOString(),next_funding:Number.isFinite(data.nextFundingTime)?new Date(data.nextFundingTime).toISOString():null,source:'https://www.binance.com/en/futures/'+symbol};
 }
 
+

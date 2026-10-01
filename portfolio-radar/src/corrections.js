@@ -34,3 +34,5 @@ export async function parseCorrection(text,rows,key,selected=null,onUsage=async(
  if(out.changes.length>20||out.changes.some(c=>!Number.isInteger(c.row)||c.row<1||c.row>rows.length))throw new Error('invalid_correction');
  return out;
 }
+
+

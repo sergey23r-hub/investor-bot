@@ -48,3 +48,5 @@ export async function cachedMarket(db,assets,now=new Date(),previous=null){
  else if(saved&&assets.some(a=>result.quotes[a.key]===saved.quotes?.[a.key]&&result.quotes[a.key]))result.reused_market_as_of=saved.as_of;
  return result;
 }
+
+

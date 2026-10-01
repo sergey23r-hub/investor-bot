@@ -149,3 +149,5 @@ export class Providers{
     return {status:(raw.items?.length&&!items.length)?'unverified':'ok',items,events,profile,checked_at:now.toISOString(),window_label:window.label,window_since:window.since,window_hours:window.hours,retrieved_sources:sources.length};
   }
 }
+
+

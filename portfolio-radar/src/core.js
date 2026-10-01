@@ -167,3 +167,5 @@ export function digestText({accounts,quotes,news,market,now=new Date()}){
   lines.push('<i>Изменения: крипта — за 24 часа, бумаги — за последнюю сессию. Цены справочные, возможна задержка; доступность продажи уточняйте у брокера. Это обзор событий, а не доходность портфеля.</i>');
   return splitText(lines.join('\n\n'),3600).map((part,i)=>i?`📊 <b>Ваш портфель · продолжение ${i+1}</b>\n\n${part}`:part);
 }
+
+

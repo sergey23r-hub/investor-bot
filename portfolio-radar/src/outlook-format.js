@@ -83,3 +83,4 @@ export function outlookBody(user,assets,records,selection,access,page=0,now=new 
  keyboard.push([{text:'📊 Мой обзор',callback_data:'insight:report'},{text:'Главный экран',callback_data:'ui:home'}]);
  return {chat_id:user,text:lines.join('\n\n'),parse_mode:'HTML',link_preview_options:{is_disabled:true},reply_markup:{inline_keyboard:keyboard}};
 }
+

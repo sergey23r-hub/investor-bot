@@ -29,3 +29,5 @@ export async function internationalResolve(raw,fetchJson){
  if(!d?.meta||raw.currency&&d.meta.currency!==raw.currency)return null;
  return {...raw,name:d.meta.longName||c.longname||c.shortname,symbol:c.symbol,key:'yahoo:'+c.symbol,provider:'yahoo',provider_id:c.symbol,verified:true,issue:null,currency:d.meta.currency,isin:raw.isin||null};
 }
+
+

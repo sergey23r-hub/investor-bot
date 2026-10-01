@@ -7,3 +7,5 @@ export function usageRecord(response,scope,assetKey=null){
  return {response_id:response.id,scope,asset_key:assetKey,model:response.model||'unknown',status:response.status||'completed',input_tokens:input,cached_tokens:cached,output_tokens:output,search_calls:calls,
   estimated_usd:((input-cached)*RATES.input+cached*RATES.cached+output*RATES.output)/1e6+calls*RATES.web_search};
 }
+
+

@@ -75,3 +75,4 @@ export function newestQuote(a,b,now=new Date()){
  if(!valid(a))return valid(b)?b:null;if(!valid(b))return a;
  return Date.parse(b.as_of)>Date.parse(a.as_of)?b:a;
 }
+

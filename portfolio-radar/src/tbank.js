@@ -144,3 +144,4 @@ export class TBank{
   await this.radar.flush();return {processed:rows?.length||0};
  }
 }
+
