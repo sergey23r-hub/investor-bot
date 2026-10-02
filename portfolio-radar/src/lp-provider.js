@@ -107,9 +107,10 @@ export class PoolProvider{
    for(let i=0;i<candidates.length;i+=3)await Promise.all(candidates.slice(i,i+3).map(async m=>{
     const r=await this.once('evm-pool:'+m.chain+':'+m.address,1,async()=>{
      const data=await this.get('https://api.dexscreener.com/latest/dex/pairs/'+m.chain+'/'+m.address,{maxBytes:2000000});
+     if(data.pairs===null)return {pools:[],not_indexed:true};
      if(!Array.isArray(data.pairs))throw Error('lp_source_schema');
      return {pools:data.pairs.map(d=>staticFeePool(m,d,asset)).filter(Boolean)};
-    });if(r.pools)rows.push(...r.pools);else coverage.push({source:m.platform+' · '+m.address,status:'unavailable'});
+    });if(r.not_indexed)coverage.push({source:m.platform+' · '+m.address,status:'not_indexed'});else if(r.pools)rows.push(...r.pools);else coverage.push({source:m.platform+' · '+m.address,status:'unavailable'});
    }));
   }
   const map=new Map();for(const p of rows){const old=map.get(p.key);if(!old||p.basis&&!old.basis||p.basis===old.basis&&p.observed_at>old.observed_at)map.set(p.key,p);}

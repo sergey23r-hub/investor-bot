@@ -1,4 +1,37 @@
-# xStocks / USDC monitor — 0.8.0
+# xStocks / USDC monitor — 0.8.1
+
+## 0.8.1 — screenshot recovery and comparison UX
+
+The first real import exposed a missing-context problem: the extractor saved
+`CLMM` as the venue even though it describes the liquidity mechanism. Normalization
+now stores CLMM/DLMM/AMM/CPMM in `pool_type`; a generic label never establishes a
+venue or chain. The extraction schema and instructions enforce the same rule.
+
+`/pools` now shows a compact overview (ten positions per page), saved USD value,
+matching progress, historical screenshot rates, and a prominent out-of-range
+notice. Detailed current pool comparisons are a separate view, also used by
+automatic alerts. Screenshot timestamps survive later corrections.
+
+“Уточнить мои пулы” opens a preview copied from the saved profile without a new
+upload or AI request. Cached verified pairs supply venue/chain suggestions and
+individual pool choices. Suggestions match the asset and any known fee tier and
+pool type; a venue suggestion applies only where that context has one candidate.
+Unknown identities never get assigned from the largest TVL or highest APR.
+The user selects a context/pool, reviews the exact addresses, and explicitly saves.
+Amounts, ranges, screenshot APR/APY and the screenshot timestamp are preserved.
+The existing ownership, paid-access and optimistic profile-version commit checks
+remain in force. Candidate callbacks use stable identity tokens, not mutable
+ranking offsets; ambiguous tokens are rejected. Delivery rechecks entitlement.
+
+DEX Screener's nullable `pairs` response is cached as no indexed data and shown in
+coverage instead of being misclassified as a schema error. It does not acquire a
+yield or enter the ranking. There are no new manual market refresh endpoints.
+
+Validation: full Node suite, regression coverage for legacy CLMM imports, ambiguous
+matches, reordering, ownership, downgrade at delivery, historical date preservation,
+alert page routing, no-data responses, Telegram limits, and a read-only replay of
+the saved real import. Production customer positions are never test fixtures or
+part of this repository. No billing operations or test chat messages are required.
 
 This release adds `/pools` and the home/report button. Paid subscribers can upload
 up to 8 screenshots, inspect up to 30 LP positions, correct them with `/poolfix`,

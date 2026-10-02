@@ -63,18 +63,49 @@ export function fresh(p,now=Date.now()){
 export function ranked(pools,asset=null,now=Date.now()){
  return pools.filter(p=>(!asset||p.asset===asset)&&p.verified&&!p.halted&&!p.warning&&fresh(p,now)&&p.basis==='gross-fees/tvl'&&p.address&&p.tvl>=10000&&p.volume24h>=1000&&positive(p.fee_apr24h)!==null&&p.fee_apr24h<=1000).sort((a,b)=>b.fee_apr24h-a.fee_apr24h||b.tvl-a.tvl||a.key.localeCompare(b.key));
 }
-export function resolvePosition(row,pools){
- let candidates=pools.filter(p=>p.asset.toLowerCase()===row.symbol?.toLowerCase()&&p.address);
+const venueName=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+const genericType=s=>/^(CLMM|DLMM|AMM|CPMM)$/i.test(String(s||'').trim())?String(s).trim().toUpperCase():null;
+function poolType(p){return p.pool_type||(p.platform==='Meteora DLMM'?'DLMM':p.concentrated?'CLMM':null);}
+export function positionCandidates(input,pools){
+ const row={...input,platform:genericType(input.platform)?null:input.platform,pool_type:input.pool_type||genericType(input.platform)};
+ let candidates=pools.filter(p=>p.verified&&p.asset?.toLowerCase()===row.symbol?.toLowerCase()&&p.address);
  if(row.network)candidates=candidates.filter(p=>p.chain===chainId(row.network));
  if(row.pool_address)candidates=candidates.filter(p=>addressKey(p.chain,p.address)===addressKey(p.chain,row.pool_address));
  else{
-  if(!row.network||!row.platform)return {pool:null,candidates:[]};
-  const name=String(row.platform).toLowerCase().replace(/[^a-z0-9]/g,'');
-  candidates=candidates.filter(p=>p.platform.toLowerCase().replace(/[^a-z0-9]/g,'').startsWith(name));
+  if(row.platform)candidates=candidates.filter(p=>venueName(p.platform)===venueName(row.platform));
+  if(row.pool_type)candidates=candidates.filter(p=>!(row.pool_type==='CLMM'&&p.concentrated===false)&&(!poolType(p)||poolType(p)===row.pool_type));
   if(positive(row.fee_tier_pct)!==null)candidates=candidates.filter(p=>positive(p.fee_tier_pct)!==null&&Math.abs(p.fee_tier_pct-row.fee_tier_pct)<0.000001);
  }
- return {pool:candidates.length===1?candidates[0]:null,candidates:candidates.slice(0,10)};
+ const unique=new Map();for(const p of candidates)if(!unique.has(p.key)||(!unique.get(p.key).basis&&p.basis))unique.set(p.key,p);
+ return [...unique.values()].sort((a,b)=>(b.tvl||0)-(a.tvl||0)||a.key.localeCompare(b.key));
 }
+export function resolvePosition(row,pools){
+ const candidates=positionCandidates(row,pools),context=row.pool_address||(row.network&&row.platform&&!genericType(row.platform));
+ return {pool:context&&candidates.length===1?candidates[0]:null,candidates:candidates.slice(0,10)};
+}
+const venueKey=p=>candidateToken({key:venueName(p.platform)+'.'+p.chain});
+export function venueSuggestions(rows,pools){
+ const groups=new Map();
+ for(const row of rows){
+  if(resolvePosition(row,pools).pool||row.pool_address)continue;
+  const choices=positionCandidates(row,pools),keys=new Set(choices.map(venueKey));
+  for(const key of keys){const matches=choices.filter(p=>venueKey(p)===key);if(matches.length!==1)continue;
+   const p=matches[0],g=groups.get(key)||{key,platform:p.platform,network:p.network,count:0};g.count++;groups.set(key,g);
+  }
+ }
+ return [...groups.values()].sort((a,b)=>b.count-a.count||a.key.localeCompare(b.key));
+}
+export function applyVenue(rows,pools,key){
+ return rows.map(input=>{
+  const row=normalizePosition(input);if(resolvePosition(row,pools).pool||row.pool_address)return row;
+  const choices=positionCandidates(row,pools).filter(p=>venueKey(p)===key);
+  return choices.length===1?withPool(row,choices[0]):row;
+ });
+}
+export function withPool(row,pool){return {...normalizePosition(row),platform:pool.platform,network:pool.network,pool_address:pool.address,pool_type:poolType(pool)||row.pool_type||null};}
+// Stable callback ID: a market refresh must not change the meaning of a button.
+// Callers reject collisions, stale imports and candidates that no longer match.
+export function candidateToken(pool){let h=2166136261;for(const c of pool.key)h=Math.imul(h^c.charCodeAt(0),16777619);return (h>>>0).toString(16);}
 export function comparison(row,pools,now=Date.now()){
  const current=resolvePosition(row,pools).pool,best=ranked(pools,row.symbol,now)[0]||null;
  if(!current||!best||!fresh(current,now)||current.basis!==best.basis||positive(current.fee_apr24h)===null)return {current,best,delta:null,monthly:null};
@@ -84,6 +115,9 @@ export function comparison(row,pools,now=Date.now()){
 export function normalizePosition(r){
  const text=(v,n=80)=>typeof v==='string'?v.trim().slice(0,n):null;
  const row={symbol:text(r.symbol,24),network:text(r.network,32),platform:text(r.platform,40),pool_address:text(r.pool_address,100),capital_usd:positive(r.capital_usd),shown_rate:positive(r.shown_rate),rate_type:['APR','APY'].includes(r.rate_type)?r.rate_type:null,rate_window:text(r.rate_window,40),rate_scope:text(r.rate_scope,40),range_status:['in','out','unknown'].includes(r.range_status)?r.range_status:'unknown',range_lower:positive(r.range_lower),range_upper:positive(r.range_upper),fee_tier_pct:positive(r.fee_tier_pct),issue:text(r.issue,160)};
+ row.pool_type=genericType(r.pool_type)||genericType(row.platform);
+ row.captured_at=typeof r.captured_at==='string'&&Number.isFinite(Date.parse(r.captured_at))?new Date(r.captured_at).toISOString():null;
+ if(genericType(row.platform))row.platform=null;
  if(row.capital_usd>1e12)row.capital_usd=null;
  if(row.pool_address&&!/^(?:0x(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})|[1-9A-HJ-NP-Za-km-z]{32,44}|[A-Za-z0-9_-]{48})$/.test(row.pool_address))row.pool_address=null;
  return row;

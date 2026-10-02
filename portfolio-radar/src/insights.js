@@ -171,7 +171,7 @@ export class Insights{
   const {_portfolius:guard,...body}=row.body;if(!guard)return body;
   if(body.chat_id!==row.user_id)return null;
   const access=await this.radar.billing.access(row.user_id);
-  if(guard.pools||guard.lp_preview)return this.radar.pools.deliveryBody(row,guard,access);
+  if(guard.pools||guard.lp_preview||guard.lp_candidates)return this.radar.pools.deliveryBody(row,guard,access);
   if(guard.outlook)return this.radar.outlooks.body(row.user_id,guard.page,access);
   if(guard.notice){if(guard.notice==='trial_ending'&&access.tier!=='trial'||guard.notice==='trial_ended'&&access.tier!=='free')return null;return body;}
   if(guard.requires_full&&!fullAccess(access))return {...body,text:'Полный доступ закончился. Ответы по портфелю доступны в подписке. /subscribe — подключение.'};

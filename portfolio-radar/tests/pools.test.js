@@ -66,7 +66,7 @@ test('corrections preserve unknown amounts, support deletion, and do not treat w
 test('all report and preview pages stay within Telegram message limits and escape screenshot text',()=>{
  const pools=Array.from({length:30},(_,i)=>({...base,key:'pool'+i,address:'Z'.repeat(44),asset:'MSFTx',platform:'Raydium'}));
  const positions=Array.from({length:30},()=>normalizePosition({symbol:'MSFTx',platform:'<b>fake</b>',network:'Solana',capital_usd:100000,shown_rate:999,rate_type:'APY',issue:'x'.repeat(160)}));
- for(const section of ['home','market','unrated','coverage'])for(let page=0;page<15;page++){
+ for(const section of ['home','positions','market','unrated','coverage'])for(let page=0;page<15;page++){
   const v=poolsView({access:{tier:'paid'},profile:{positions,updated_at:iso},markets:[{data:{symbol:'MSFTx',pools,checked_at:iso,coverage:[]}}],section,page,now});assert.ok(v.text.length<4096,section+' '+v.text.length);
  }
  const v=previewText({rows:positions,warnings:[],id:'id'},pools);assert.ok(v.text.length<4096);assert.match(v.text,/&lt;b&gt;/);
@@ -105,3 +105,4 @@ test('fixed-fee EVM comparisons require the same verified pair and never assume 
  assert.equal(staticFeePool(meta,{...dex,quoteToken:{address:'fake'}},asset,now),null);
  assert.equal(normalizePosition({pool_address:'0x'+'e'.repeat(64)}).pool_address.length,66);
 });
+
