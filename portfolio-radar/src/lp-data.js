@@ -117,6 +117,7 @@ export function normalizePosition(r){
  const row={symbol:text(r.symbol,24),network:text(r.network,32),platform:text(r.platform,40),pool_address:text(r.pool_address,100),capital_usd:positive(r.capital_usd),shown_rate:positive(r.shown_rate),rate_type:['APR','APY'].includes(r.rate_type)?r.rate_type:null,rate_window:text(r.rate_window,40),rate_scope:text(r.rate_scope,40),range_status:['in','out','unknown'].includes(r.range_status)?r.range_status:'unknown',range_lower:positive(r.range_lower),range_upper:positive(r.range_upper),fee_tier_pct:positive(r.fee_tier_pct),issue:text(r.issue,160)};
  row.pool_type=genericType(r.pool_type)||genericType(row.platform);
  row.captured_at=typeof r.captured_at==='string'&&Number.isFinite(Date.parse(r.captured_at))?new Date(r.captured_at).toISOString():null;
+ row.switch_cost_usd=positive(r.switch_cost_usd);
  if(genericType(row.platform))row.platform=null;
  if(row.capital_usd>1e12)row.capital_usd=null;
  if(row.pool_address&&!/^(?:0x(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})|[1-9A-HJ-NP-Za-km-z]{32,44}|[A-Za-z0-9_-]{48})$/.test(row.pool_address))row.pool_address=null;
@@ -126,8 +127,8 @@ export function correctPosition(rows,text){
  const match=text.match(/^\/poolfix(?:@\w+)?\s+(\d+)\s+(.+)$/iu);if(!match)return null;
  const index=Number(match[1])-1;if(index<0||index>=rows.length)throw Error('lp_row_missing');
  if(/^(удалить|delete)$/iu.test(match[2]))return rows.filter((_,i)=>i!==index);
- const fields={актив:'symbol',asset:'symbol',сеть:'network',chain:'network',площадка:'platform',platform:'platform',пул:'pool_address',pool:'pool_address',сумма:'capital_usd',capital:'capital_usd',комиссия:'fee_tier_pct',fee:'fee_tier_pct'};
+ const fields={актив:'symbol',asset:'symbol',сеть:'network',chain:'network',площадка:'platform',platform:'platform',пул:'pool_address',pool:'pool_address',сумма:'capital_usd',capital:'capital_usd',комиссия:'fee_tier_pct',fee:'fee_tier_pct',расходы:'switch_cost_usd',cost:'switch_cost_usd'};
  const edits=[...match[2].matchAll(/([a-zа-я]+)=([^=]+?)(?=\s+[a-zа-я]+=|$)/giu)];if(!edits.length)throw Error('lp_fix_format');
- const next=rows.map(r=>({...r}));for(const e of edits){const field=fields[e[1].toLowerCase()];if(!field)throw Error('lp_fix_format');next[index][field]=['capital_usd','fee_tier_pct'].includes(field)?e[2].trim().replace(',','.'):e[2].trim();}
+ const next=rows.map(r=>({...r}));for(const e of edits){const field=fields[e[1].toLowerCase()];if(!field)throw Error('lp_fix_format');next[index][field]=['capital_usd','fee_tier_pct','switch_cost_usd'].includes(field)?e[2].trim().replace(',','.'):e[2].trim();}
  next[index]=normalizePosition(next[index]);return next;
 }

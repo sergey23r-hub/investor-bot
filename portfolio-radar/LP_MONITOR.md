@@ -1,4 +1,49 @@
-# xStocks / USDC monitor — 0.8.1
+# xStocks / USDC monitor — 0.8.2
+
+## 0.8.2 — proposals and opportunity-first reports
+
+The default `/pools` screen now proposes a complete interpretation of unresolved
+positions from verified cached pairs. A user can confirm and save it in one tap.
+The same shortcut is offered after screenshot extraction, with a compact ten-row
+preview. Detailed addresses, alternate candidates and manual corrections remain
+behind “Изменить / другие варианты”. No identity is silently confirmed. Proposal
+tokens bind the normalized positions and selected addresses, not changing yields
+or ranking offsets; ownership, paid access and profile-version checks still apply.
+Interrupted commits resume the same staged import. Repeated taps cannot replace
+a newer profile. No new schema or public endpoints are required.
+
+The home page leads with concrete alternatives: current pool → alternative,
+comparable fee APR difference, a 30-day dollar scenario on the saved capital, and
+the maximum one-time switching cost that the scenario could cover in 30 days.
+It also identifies positions with no fee advantage from switching. A provisional
+comparison before confirmation is explicitly labelled as an assumption. Pool
+links and timestamps are shown; screenshots' personal APR/APY are not used as
+current benchmarks. The detailed method remains available in comparison pages.
+
+`lp-opportunities.js` distinguishes meaningful upside, small differences (under
+$1/30 days), an adverse 7-day comparison, unknown capital, unknown/stale data,
+out-of-range snapshots and flagged/anomalous pools. Out-of-range positions and
+short-lived/uneconomic candidates do not inflate the actionable total. No missing
+gas/bridge/swap cost is replaced with zero. Optional user-supplied USD switching
+costs can be set with `/poolfix 1 расходы=5`; they enable a net-of-these-costs
+scenario and payback time. All scenarios still exclude protocol deductions,
+impermanent loss, token price movement and unspecified costs. They are not realized
+forgone profit or a prediction of the user's actual concentrated-liquidity earnings.
+
+The existing shared hourly collection, daily scheduled report and paid gating are
+preserved. Daily reports now contain the opportunity summary. Extra notifications
+require the same alternative in two fresh observations at least 30 minutes apart,
+>= 5 percentage points and >= $1/30 days of practical scenario upside, with a 24h
+cooldown. Known costs, an out-of-range snapshot or a contradictory 7-day window
+prevent such a signal. Delivery checks the exact alternative again and drops a
+signal whose premise disappeared. `/pause` and expired subscriptions stop delivery.
+
+Validation: 180 Node tests pass, including one-tap confirmation, double taps,
+interrupted commit recovery, stale proposals, ownership and downgrade checks,
+scenario/cost math, weekly reversals, stable-signal filtering, delivery-time
+revalidation and Telegram pagination. A read-only replay of the customer's saved
+positions verified the compact proposal and opportunity report; private positions
+are not committed as fixtures. No test Telegram messages or wallet actions.
 
 ## 0.8.1 — screenshot recovery and comparison UX
 
