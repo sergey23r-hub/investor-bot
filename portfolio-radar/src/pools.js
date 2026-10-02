@@ -1,6 +1,6 @@
 import {PoolProvider,canonicalXStock} from './lp-provider.js';
 import {HOUR,correctPosition,normalizePosition,applyVenue,venueSuggestions,positionCandidates,candidateToken,withPool} from './lp-data.js';
-import {lpPaid,poolsView,previewText,teaser,matchingButtons,candidatesView} from './lp-format.js';
+import {lpPaid,poolsView,previewText,teaser,matchingButtons,candidatesView,top5Summary} from './lp-format.js';
 import {extractPools} from './lp-extraction.js';
 import {portfolioProposals,opportunity,actionable,stableOpportunity} from './lp-opportunities.js';
 const uuid=s=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s||'');
@@ -12,7 +12,7 @@ export class Pools{
  async profile(user){return (await this.db.get('pr_lp_profiles',{user_id:'eq.'+user,limit:1}))[0];}
  async current(user){return (await this.db.get('pr_lp_imports',{user_id:'eq.'+user,status:'in.(uploading,processing,preview)',limit:1}))[0];}
  async require(job,user){if(lpPaid(await this.radar.billing.access(user)))return true;await this.open(job,user);return false;}
- async teaser(){const markets=await this.markets().catch(()=>[]);return teaser(markets.flatMap(m=>m.data?.pools||[]));}
+ async teaser(access=null){const markets=await this.markets().catch(()=>[]);return lpPaid(access)?top5Summary(markets):teaser(markets.flatMap(m=>m.data?.pools||[]));}
  async body(user,section='home',page=0,access=null){
   access ||=await this.radar.billing.access(user);const [profile,markets]=await Promise.all([lpPaid(access)?this.profile(user):null,this.markets()]);
   const view=poolsView({access,profile,markets,section,page});
@@ -25,7 +25,7 @@ export class Pools{
  }
  async callback(job,user,action,ref,page){
   if(action==='upgrade'){await this.event(user,'upgrade',job.id);return this.radar.billing.menu(job,user);}
-  if(['home','holdings','positions','market','coverage','unrated'].includes(action))return this.open(job,user,action,Number(ref)||0);
+  if(['home','top','holdings','positions','market','coverage','unrated'].includes(action))return this.open(job,user,action,Number(ref)||0);
   if(action==='upload')return this.upload(job,user);
   if(action==='match')return this.match(job,user);
   if(action==='accept')return this.accept(job,user,ref,page);

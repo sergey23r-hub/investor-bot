@@ -1,7 +1,8 @@
 import {html} from './core.js';
-import {ranked,comparison,resolvePosition,fresh,positive,normalizePosition,venueSuggestions,positionCandidates,candidateToken} from './lp-data.js';
+import {ranked,comparison,resolvePosition,fresh,positive,normalizePosition,venueSuggestions,positionCandidates,candidateToken,globalTopPools} from './lp-data.js';
 import {portfolioProposals,opportunity,opportunitySummary} from './lp-opportunities.js';
 export const LP_BUTTON=[{text:'💧 Доходность xStocks / USDC',callback_data:'lp:home:0'}];
+export const TOP5_BUTTON=[{text:'🔥 Топ-5 пулов сейчас',callback_data:'lp:top:0'}];
 export const lpPaid=access=>access?.tier==='paid';
 const pct=n=>n===null||n===undefined?'нет данных':Number(n).toLocaleString('ru-RU',{maximumFractionDigits:2})+'%';
 const usd=n=>'$'+Number(n).toLocaleString('ru-RU',{maximumFractionDigits:2});
@@ -11,6 +12,16 @@ const link=p=>`<a href="${html(p.url)}">${html(p.platform)} · ${html(p.network)
 export const LP_CAVEAT='APR — индикатор комиссий всего пула: комиссии за 24 ч / текущий TVL × 365. До удержаний протокола, без капитализации и наград. Это не доходность вашей LP-позиции. Диапазон цены, изменение стоимости токена, IL, газ, проскальзывание и мосты меняют результат. Награды показаны отдельно; xPoints не оценены в долларах.';
 const SCENARIO='Суммы — сценарий разницы комиссий на ваш сохранённый капитал при сохранении темпа за 24 ч и доле комиссий, равной доле капитала. До удержаний протокола, IL и неуказанных расходов; не фактическая упущенная прибыль. Личный результат зависит от диапазона и цены токена.';
 const names=items=>items.slice(0,5).map(o=>html(o.row?.symbol||o.symbol||'?')).join(', ')+(items.length>5?` и ещё ${items.length-5}`:'');
+export function top5Summary(markets,now=Date.now()){
+ const {pools,eligible}=globalTopPools(markets.flatMap(m=>m.data?.pools||[]),now);
+ const lines=pools.map((p,i)=>`${i+1}. <b>${html(p.asset)}</b> · ${html(p.platform)} / ${html(p.network)} · комиссия ${pct(p.fee_tier_pct)} · <b>${pct(p.fee_apr24h)} APR</b>`);
+ return `🔥 <b>Топ-5 пулов xStocks / USDC</b>\nОбщий рейтинг по APR комиссий за 24 ч, независимо от ваших позиций.\n\n${lines.join('\n')||'Свежих подходящих пулов пока нет. Обновляем автоматически.'}${pools.length&&pools.length<5?'\nСейчас доступны '+pools.length+' из 5: остальные не проходят фильтры.':''}\n\nНаблюдаем ${markets.length} активов · подходят ${eligible} пулов.${pools.length?' Замеры: '+date(pools.map(p=>p.observed_at).sort()[0])+' — '+date(pools.map(p=>p.observed_at).sort().at(-1))+'.':''}\nДо удержаний и расходов; высокий APR не гарантирует личную доходность. Подробности и ссылки — «Топ-5 пулов сейчас».`;
+}
+export function top5View(markets,now=Date.now()){
+ const {pools,eligible}=globalTopPools(markets.flatMap(m=>m.data?.pools||[]),now);
+ const cards=pools.map((p,i)=>`${i+1}. <b>${html(p.asset)} / USDC — ${pct(p.fee_apr24h)} APR</b>\n${link(p)} · комиссия ${pct(p.fee_tier_pct)}${p.wrapped?' · обёртка':''}\nAPR за 7 д: ${pct(p.fee_apr7d)} · награды: ${pct(p.reward_apr24h)} APR\nTVL ${usd(p.tvl)} · оборот за 24 ч ${usd(p.volume24h)}${p.estimated_fees?'\nКомиссии оценены по обороту и ставке пула.':''}\nПроверено ${date(p.observed_at)} · <a href="${html(p.source)}">Источник</a>`);
+ return `🔥 <b>Топ-5 пулов сейчас · xStocks / USDC</b>\nПо последним доступным замерам, от большего APR комиссий за 24 ч к меньшему. Общий рейтинг не зависит от вашего портфеля.\nНаблюдаем ${markets.length} активов; фильтры прошли ${eligible} пулов.\n\n${cards.join('\n\n')||'Свежих подходящих пулов пока нет. Обновление идёт автоматически.'}${pools.length&&pools.length<5?'\n\nСейчас доступны '+pools.length+' из 5: недостающие строки не заполняем устаревшими данными.':''}\n\nФильтры: замер ≤ 4 ч, TVL ≥ $10 000, оборот ≥ $1 000/сутки, APR ≤ 1 000%. Обновляем примерно раз в час. Охват ограничен проверенными источниками.\n\n${LP_CAVEAT}`;
+}
 export function opportunityLine(o){
  const r=o.row,title=`<b>${html(r.symbol||'?')}</b>${r.capital_usd!==null?' · '+usd(r.capital_usd):''}`;
  if(o.status==='keep')return `✅ ${title}\n${link(o.current)} · ${pct(o.current.fee_apr24h)} APR. Переход ради комиссий сейчас не даёт преимущества в доступной выборке.`;
@@ -92,6 +103,8 @@ export function poolsView({access,profile,markets,section='home',page=0,now=Date
   const ids=new Set(ranked(all,null,now).map(p=>p.key)),other=all.filter(p=>!ids.has(p.key)).sort((a,b)=>(b.tvl||0)-(a.tvl||0));
   pages=Math.max(1,Math.ceil(other.length/4));page=Math.min(Math.max(Number(page)||0,0),pages-1);
   text=`🔎 <b>Остальные найденные пулы · ${page+1}/${pages}</b>\n\n`+(other.slice(page*4,page*4+4).map(p=>`<b>${html(p.asset)} / USDC</b> · ${link(p)}\nTVL ${usd(p.tvl||0)} · ${!fresh(p,now)?'замер устарел':p.fee_apr24h===null?'сопоставимый APR не подтверждён':'не проходит фильтр ликвидности/аномалий'}\n${p.address?'<code>'+html(p.address)+'</code>':'Карточка агрегатора: адрес пула не подтверждён'}\nПроверено ${date(p.observed_at)}`).join('\n\n')||'Других проверенных пар пока нет.')+'\n\nПроверены контракты пары, но для рейтинга нужна свежая сопоставимая доходность и достаточная ликвидность. Карточка агрегатора может описывать уже показанный пул.';
+ }else if(section==='top'||section==='home'&&!positions.length){
+  text=top5View(markets,now);
  }else if(section==='market'||!positions.length){
   const poolList=ranked(all,null,now);pages=Math.max(1,Math.ceil(poolList.length/3));page=Math.min(Math.max(Number(page)||0,0),pages-1);
   text=`💧 <b>xStocks / USDC · ${page+1}/${pages}</b>\nСопоставимые пулы: TVL ≥ $10 000, оборот ≥ $1 000/сутки; аномалии свыше 1 000% исключены.\n\n`+(poolList.slice(page*3,page*3+3).map((p,i)=>poolLine(p,page*3+i+1,now)).join('\n\n')||'Свежие сопоставимые данные пока собираются. Уведомления придут после добавления ваших LP-позиций.')+'\n\n'+LP_CAVEAT;
@@ -111,7 +124,7 @@ export function poolsView({access,profile,markets,section='home',page=0,now=Date
  }else{
   const proposals=portfolioProposals(positions,all,now),proposal=proposals.length===1?proposals[0]:null;
   const summary=opportunitySummary(proposal?.rows||positions,all,now),offers=summary.sorted.filter(o=>o.delta>0&&!['range','review'].includes(o.status));
-  pages=Math.max(1,Math.ceil(offers.length/3));page=Math.min(Math.max(Number(page)||0,0),pages-1);
+  pages=Math.max(1,Math.ceil(offers.length/2));page=Math.min(Math.max(Number(page)||0,0),pages-1);
   text=`💧 <b>Где ваш капитал может приносить больше</b>\n${positions.length} позиций · ${usd(positions.reduce((s,r)=>s+(r.capital_usd||0),0))} по сохранённым снимкам\n\n`;
   if(proposal){
    text+=`🔎 <b>Похоже, ваши пулы — ${html(proposal.platform)} · ${html(proposal.network)}.</b> Подобрали ${proposal.count}. Подтвердите одной кнопкой; ниже — предварительный расчёт при этом предположении.\n\n`;
@@ -122,20 +135,22 @@ export function poolsView({access,profile,markets,section='home',page=0,now=Date
   if(summary.gain>0)text+=`<b>Потенциал дополнительного дохода от комиссий: ≈ +${usd(summary.gain)} за 30 дней</b>\nВариантов с заметной прибавкой: ${summary.offers.length}. ${proposal?'Предварительно. ':''}Если темп сохранится; до неуказанных расходов.\n\n`;
   else text+='Заметной подтверждаемой прибавки сейчас не нашли. Покажем новые возможности, когда они появятся.\n\n';
   if(summary.range.length)text+=`⚠️ <b>Вне диапазона на скриншоте: ${names(summary.range)}</b>. Сначала проверьте эти позиции: комиссии могут не начисляться.\n\n`;
-  text+=offers.slice(page*3,page*3+3).map(opportunityLine).join('\n\n');
+  text+=offers.slice(page*2,page*2+2).map(opportunityLine).join('\n\n');
   if(summary.keep.length)text+=`\n\n✅ <b>Преимущества от перехода по комиссиям нет:</b> ${names(summary.keep)}.`;
   if(!offers.length&&summary.pending.length){
    const picks=summary.pending.filter(o=>o.best).slice(0,3);
    if(picks.length)text+='\n\n<b>Лучшие найденные варианты для ваших активов</b>\n'+picks.map(o=>`${html(o.row.symbol)}: ${link(o.best)} · ${pct(o.best.fee_apr24h)} APR. Разницу с вашим пулом ещё уточняем.`).join('\n');
   }
   text+=`\n\n<i>${SCENARIO}</i>\nСнимки: ${date(snapshotDate(profile))}.\nПроверяем примерно раз в час. Ежедневная сводка — /time; устойчивые значимые изменения — отдельным сообщением, не чаще раза в сутки. /pause — остановить.`;
+  text+='\n\n'+top5Summary(markets,now);
   keyboard.push([{text:'Сравнение по всем активам',callback_data:'lp:positions:0'},{text:'Мои позиции',callback_data:'lp:holdings:0'}]);
  }
+ if(section!=='top')keyboard.push(TOP5_BUTTON);
  if(section!=='home'&&positions.some(r=>!resolvePosition(r,all).pool)||section==='home'&&!portfolioProposals(positions,all,now).length&&positions.some(r=>!resolvePosition(r,all).pool))keyboard.push([{text:'🔎 Предложить мои пулы',callback_data:'lp:match:0'}]);
  if(pages>1)keyboard.push([...(page>0?[{text:'←',callback_data:`lp:${section}:${page-1}`}]:[]),...(page+1<pages?[{text:'→',callback_data:`lp:${section}:${page+1}`}]:[])]);
   keyboard.push([{text:'📸 Добавить / заменить пулы',callback_data:'lp:upload'}]);
   keyboard.push([{text:'Другие найденные пулы',callback_data:'lp:unrated:0'}]);
- if(positions.length)keyboard.push([{text:'Мои LP-позиции',callback_data:'lp:home:0'},{text:'Все доступные пулы',callback_data:'lp:market:0'}]);
+ keyboard.push([{text:'Моя выгода',callback_data:'lp:home:0'},{text:'Все доступные пулы',callback_data:'lp:market:0'}]);
  keyboard.push([{text:'Источники и охват',callback_data:'lp:coverage:0'},{text:'← Главный экран',callback_data:'ui:home'}]);
  return {text,keyboard};
 }

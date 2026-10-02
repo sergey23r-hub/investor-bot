@@ -63,6 +63,17 @@ export function fresh(p,now=Date.now()){
 export function ranked(pools,asset=null,now=Date.now()){
  return pools.filter(p=>(!asset||p.asset===asset)&&p.verified&&!p.halted&&!p.warning&&fresh(p,now)&&p.basis==='gross-fees/tvl'&&p.address&&p.tvl>=10000&&p.volume24h>=1000&&positive(p.fee_apr24h)!==null&&p.fee_apr24h<=1000).sort((a,b)=>b.fee_apr24h-a.fee_apr24h||b.tvl-a.tvl||a.key.localeCompare(b.key));
 }
+export function globalTopPools(pools,now=Date.now()){
+ // Use the newest comparable observation for each exact pool. Never restrict
+ // the common market ranking to one customer's assets or duplicate an address.
+ const unique=new Map();
+ for(const p of pools){
+  if(!p.key||!p.address||!p.verified||p.basis!=='gross-fees/tvl')continue;
+  const old=unique.get(p.key);if(!old||Date.parse(p.observed_at)>Date.parse(old.observed_at))unique.set(p.key,p);
+ }
+ const eligible=ranked([...unique.values()],null,now).filter(p=>p.fee_apr24h>0);
+ return {pools:eligible.slice(0,5),eligible:eligible.length};
+}
 const venueName=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
 const genericType=s=>/^(CLMM|DLMM|AMM|CPMM)$/i.test(String(s||'').trim())?String(s).trim().toUpperCase():null;
 function poolType(p){return p.pool_type||(p.platform==='Meteora DLMM'?'DLMM':p.concentrated?'CLMM':null);}

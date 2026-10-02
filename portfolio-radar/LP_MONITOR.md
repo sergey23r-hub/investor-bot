@@ -1,4 +1,30 @@
-# xStocks / USDC monitor — 0.8.2
+# xStocks / USDC monitor — 0.8.3
+
+## 0.8.3 — common top five
+
+`/top5` and “Топ-5 пулов сейчас” show five pools from the entire shared market
+cache, independent of a customer's holdings. Paid customers without LP imports
+see this ranking when opening `/pools`. Personal LP summaries include a compact
+top five; ordinary paid portfolio summaries include it when space permits and
+always expose the full ranking button. Free/trial customers keep the existing
+upgrade teaser. Delivery rechecks current entitlement and market freshness.
+
+The ranking orders positive gross 24h fee APR, with the existing verified-pair,
+four-hour freshness, TVL, volume, warning/halt and anomaly filters. It chooses the
+newest comparable observation per pool identity before ranking, removes duplicate
+addresses, and permits multiple different pools of one asset. Fewer than five
+eligible pools produces an explicitly incomplete list, never fabricated entries.
+
+Each full card shows asset, platform, network, fee tier, 24h/7d fee APR, separate
+reward APR, TVL, volume, measurement time, pool link and source. Both views state
+the actual watched-asset and eligible-pool counts: this is a top five of covered
+sources, not an assertion of exhaustive worldwide coverage or a live tick feed.
+Buttons and `/top5` read the shared cache without forcing provider calls. Source
+collection cadence, subscription price and billing are unchanged.
+
+Validation: 185 tests pass, including cross-asset ranking, newest-observation
+deduplication, exclusion filters, empty/partial rankings, no-upload access,
+delivery-time downgrade, cache-only callbacks and Telegram message lengths.
 
 ## 0.8.2 — proposals and opportunity-first reports
 

@@ -49,9 +49,9 @@ test('provisional suggestions are labelled, free users cannot access them, and p
 });
 test('all opportunities remain reachable across pages and within Telegram limits',()=>{
  const positions=Array.from({length:30},(_,i)=>({...row,symbol:'TEST'+i+'x',capital_usd:10000})),pools=positions.flatMap(r=>[current,best].map(p=>({...p,asset:r.symbol})));
- for(let page=0;page<10;page++){
+ for(let page=0;page<15;page++){
   const v=poolsView({access:{tier:'paid'},profile:{positions,version:1,updated_at:iso},markets:[{data:{pools}}],page,now});assert.ok(v.text.length<4096,v.text.length);
   for(const b of v.keyboard.flat())assert.ok(Buffer.byteLength(b.callback_data)<=64);
-  assert.match(v.text,new RegExp('TEST'+page*3+'x'));
+  assert.match(v.text,new RegExp('TEST'+page*2+'x'));
  }
 });

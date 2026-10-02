@@ -4,7 +4,7 @@ import {newsDay} from './daily.js';
 import {cachedMarket} from './first-look.js';
 import {fullAccess,filterSnapshot,stories,storyId,reportPages,reportKeyboard,weeklySnapshot,dateLabel} from './report-format.js';
 import {answerPortfolioQuestion} from './portfolio-qa.js';
-import {LP_BUTTON} from './lp-format.js';
+import {LP_BUTTON,TOP5_BUTTON,lpPaid} from './lp-format.js';
 
 const validId=s=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s||'');
 const reportSections=new Set(['summary','assets','news','calendar','market','structure']);
@@ -55,7 +55,7 @@ export class Insights{
   if(!Number.isInteger(page)||page<0||page>=pages.length)return null;
   const keyboard=snapshot.empty_portfolio?[[{text:'📸 Добавить позиции',callback_data:'ui:upload'},{text:'Главный экран',callback_data:'ui:home'}]]:reportKeyboard(report.id,section,access,page,pages.length);
   let text=pages[page];
-  if(section==='summary'&&page===0){const offer=await this.radar.pools.teaser();if(text.length+offer.length<3900)text+='\n\n'+offer;keyboard.push(LP_BUTTON);}
+  if(section==='summary'&&page===0){const offer=await this.radar.pools.teaser(access);if(text.length+offer.length<3900)text+='\n\n'+offer;keyboard.push(LP_BUTTON);if(lpPaid(access))keyboard.push(TOP5_BUTTON);}
   return {chat_id:user,text,parse_mode:'HTML',link_preview_options:{is_disabled:true},reply_markup:{inline_keyboard:keyboard}};
  }
  async sendReport(job,user,report,section='summary',page=0,{automatic=false}={}){
@@ -195,4 +195,3 @@ export class Insights{
   return this.radar.reply(job,user,'<b>📚 Коротко об инвестиционных событиях</b>\n\n<b>Купон</b> — процентная выплата по облигации. При плавающей ставке будущая сумма может быть неизвестна.\n\n<b>Оферта</b> — возможность или условие досрочного выкупа облигации. Порядок участия зависит от условий выпуска и брокера.\n\n<b>Амортизация</b> — возврат части номинала облигации. Это возврат капитала, а не купонный доход.\n\n<b>Дивидендная отсечка</b> — дата определения владельцев, имеющих право на выплату. Это не дата поступления денег; учитывайте срок расчётов при покупке.\n\n<b>Разблокировка токенов</b> — снятие ограничений на обращение части токенов. Увеличение доступного предложения не гарантирует падение цены.\n\n<b>Концентрация</b> — большая доля портфеля в одном активе, эмитенте или секторе. Связанные активы могут двигаться одновременно.',[[{text:'📊 Мой обзор',callback_data:'insight:report'},{text:'💬 Вопрос',callback_data:'insight:ask'}]]);
  }
 }
-

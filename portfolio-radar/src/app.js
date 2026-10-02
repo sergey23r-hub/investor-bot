@@ -207,6 +207,7 @@ export class Radar{
   if(cmd?.startsWith('/')&&cmd!=='/ask')await this.insights.clearQuestion(id);
   if(cmd==='/report')return this.insights.open(job,id);
   if(cmd==='/pools')return this.pools.open(job,id);
+  if(cmd==='/top5')return this.pools.open(job,id,'top');
   if(cmd==='/poolfix')return this.pools.correction(job,id,text);
   if(cmd==='/outlook'||cmd==='/forecasts')return this.outlooks.open(job,id);
   if(cmd==='/week')return this.insights.week(job,id);
@@ -450,7 +451,7 @@ export class Radar{
   const current=await this.telegram('getWebhookInfo',{});const target=base.replace(/\/$/,'')+'/webhook';
   if(current.url&&current.url!==target)throw new Error('bot_already_connected_elsewhere');
   await this.telegram('setWebhook',{url:target,secret_token:this.config.webhook_secret,allowed_updates:['message','callback_query','pre_checkout_query'],max_connections:10,drop_pending_updates:false});
-  await this.telegram('setMyCommands',{commands:[{command:'start',description:'Главный экран Portfolius'},{command:'help',description:'Как пользоваться Portfolius'},{command:'done',description:'Распознать загруженные скриншоты'},{command:'report',description:'Открыть готовый обзор'},{command:'outlook',description:'Прогнозы и ориентиры по активам'},{command:'pools',description:'Доходность пулов xStocks / USDC'},{command:'week',description:'Итоги недели'},{command:'calendar',description:'Календарь событий и выплат'},{command:'structure',description:'Структура портфеля'},{command:'archive',description:'Архив обзоров'},{command:'ask',description:'Задать вопрос по портфелю'},{command:'learn',description:'Объяснение терминов'},{command:'portfolio',description:'Мои позиции'},{command:'edit',description:'Исправить позицию'},{command:'subscribe',description:'Моя подписка'},{command:'referral',description:'Пригласить друзей'},{command:'unsubscribe',description:'Отключить продление'},{command:'paysupport',description:'Помощь с оплатой'},{command:'terms',description:'Условия подписки'},{command:'account',description:'Выбрать счёт'},{command:'time',description:'Время ежедневной сводки'},{command:'pause',description:'Остановить рассылку'},{command:'resume',description:'Включить рассылку'},{command:'cancel',description:'Отменить загрузку'},{command:'delete',description:'Удалить мои данные'}]});
+  await this.telegram('setMyCommands',{commands:[{command:'start',description:'Главный экран Portfolius'},{command:'help',description:'Как пользоваться Portfolius'},{command:'done',description:'Распознать загруженные скриншоты'},{command:'report',description:'Открыть готовый обзор'},{command:'outlook',description:'Прогнозы и ориентиры по активам'},{command:'pools',description:'Доходность пулов xStocks / USDC'},{command:'top5',description:'Топ-5 пулов xStocks / USDC сейчас'},{command:'week',description:'Итоги недели'},{command:'calendar',description:'Календарь событий и выплат'},{command:'structure',description:'Структура портфеля'},{command:'archive',description:'Архив обзоров'},{command:'ask',description:'Задать вопрос по портфелю'},{command:'learn',description:'Объяснение терминов'},{command:'portfolio',description:'Мои позиции'},{command:'edit',description:'Исправить позицию'},{command:'subscribe',description:'Моя подписка'},{command:'referral',description:'Пригласить друзей'},{command:'unsubscribe',description:'Отключить продление'},{command:'paysupport',description:'Помощь с оплатой'},{command:'terms',description:'Условия подписки'},{command:'account',description:'Выбрать счёт'},{command:'time',description:'Время ежедневной сводки'},{command:'pause',description:'Остановить рассылку'},{command:'resume',description:'Включить рассылку'},{command:'cancel',description:'Отменить загрузку'},{command:'delete',description:'Удалить мои данные'}]});
   for(const language_code of ['', 'ru']){
    await this.telegram('setMyName',{name:BOT_NAME,language_code});
    await this.telegram('setMyDescription',{description:BOT_DESCRIPTION,language_code});
@@ -465,7 +466,7 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
  const db=dbOverride||new Database(env.SUPABASE_URL,env.SUPABASE_SERVICE_ROLE_KEY);
  return async req=>{
   const path=new URL(req.url).pathname.split('/').filter(Boolean).at(-1),json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
-  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.8.2',status:'running'});
+  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.8.3',status:'running'});
   if(req.method!=='POST')return json({error:'not_found'},404);
   try{
    const radar=new Radar(db,env);await radar.init();
@@ -505,4 +506,3 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
   }catch{console.error('portfolio_request_failed');return json({error:'processing_failed'},500);}
  };
 }
-
