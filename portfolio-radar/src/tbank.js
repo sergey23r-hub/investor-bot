@@ -1,3 +1,4 @@
+import {membership,COMMUNITY_CONSENT} from './community.js';
 const b64=bytes=>btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 export const CONSENT='rub-weekly-v1';
 const ORDER=/^pr_[a-f0-9]{32}$/;
@@ -21,6 +22,16 @@ function diagnosticPaymentId(order,diagnostic){
 const matchesPayment=(order,id,b)=>b.Success===true&&b.OrderId===order.id&&String(b.PaymentId)===id&&Number(b.Amount)===order.amount_kopecks;
 export class TBank{
  constructor(radar){this.radar=radar;this.db=radar.db;}
+ get communityEnabled(){return this.radar.config?.community_pricing_enabled===true;}
+ async quote(user){return this.communityEnabled?membership(this.radar.config,user):{amount_kopecks:29000,eligible:false};}
+ async price(order){
+  if(!this.communityEnabled)return order;
+  const q=await this.quote(order.user_id);
+  const result=await this.db.rpc('pr_tbank_price',{p_order:order.id,p_eligible:q.eligible,p_checked_at:q.checked_at,p_chat_ids:q.chat_ids});
+  if(result?.price_changed)throw Error('membership_price_changed');
+  if(!result?.id)throw Error('membership_unavailable');
+  return result;
+ }
  async record(order,method,result,transportError=false){
   const value={...bankDiagnostic(method,result),...(transportError?{transport_error:'bank_status_unknown'}:{})};
   // Store an allowlist only: no RebillId, card details, signatures, URLs, or raw
@@ -51,12 +62,13 @@ export class TBank{
  }
  async initialize(order){
   if(paymentUrl(order.payment_url))return order;
+  if(!order.init_started_at)order=await this.price(order);
   const claimed=await this.db.rpc('pr_tbank_claim',{p_order:order.id,p_step:'init'});
   if(!claimed)return (await this.db.get('pr_tbank_orders',{id:'eq.'+order.id,limit:1}))[0];
   try{
-   const b=await this.gateway('Init',{order_id:order.id,subscription_id:order.subscription_id,kind:order.cycle===0?'initial':'renewal'});
+   const b=await this.gateway('Init',{order_id:order.id,subscription_id:order.subscription_id,kind:order.cycle===0?'initial':'renewal',amount_kopecks:order.amount_kopecks});
    await this.record(order,'Init',b);
-   if(b.Success!==true||!/^\d{1,20}$/.test(String(b.PaymentId))||b.OrderId!==order.id||Number(b.Amount)!==29000){
+   if(b.Success!==true||!/^\d{1,20}$/.test(String(b.PaymentId))||b.OrderId!==order.id||Number(b.Amount)!==order.amount_kopecks){
     await this.fail(order,failureCode('init',b));throw new Error('bank_checkout_rejected');
    }
    const url=paymentUrl(b.PaymentURL);
@@ -94,10 +106,16 @@ export class TBank{
   const retired=await this.db.patch('pr_tbank_subscriptions',{status:'cancelled',renew_enabled:false,cancelled_at:new Date().toISOString()},{id:'eq.'+order.subscription_id,user_id:'eq.'+order.user_id,status:'eq.pending',renew_enabled:'eq.true',cancelled_at:'is.null'});
   return retired?.length?null:order;
  }
- async checkout(user){
-  let order=await this.db.rpc('pr_tbank_begin',{p_user:user,p_consent:CONSENT});
-  order=await this.recoverCheckout(order);
-  if(!order)order=await this.db.rpc('pr_tbank_begin',{p_user:user,p_consent:CONSENT});
+ async checkout(user,expectedAmount=29000){
+  const begin=async()=>{
+   if(!this.communityEnabled)return this.db.rpc('pr_tbank_begin',{p_user:user,p_consent:CONSENT});
+   const q=await this.quote(user);
+   if(q.amount_kopecks!==expectedAmount)throw Error('membership_price_changed');
+   return this.db.rpc('pr_tbank_begin_community',{p_user:user,p_consent:COMMUNITY_CONSENT,p_eligible:q.eligible,p_checked_at:q.checked_at,p_chat_ids:q.chat_ids});
+  };
+  let order=await begin();order=await this.recoverCheckout(order);if(!order)order=await begin();
+  // Reusing a URL never silently changes the price already issued by the bank.
+  if(this.communityEnabled&&order.amount_kopecks!==expectedAmount)throw Error('membership_price_changed');
   return this.initialize(order);
  }
  async notification(body){
@@ -121,10 +139,11 @@ export class TBank{
     if(!order.init_started_at)order=await this.initialize(order);
     if(!order?.payment_id){if(order&&new Date(order.expires_at)<=new Date())await this.fail(order,'init_status_unknown');continue;}
     if(order.cycle>0&&!order.charge_started_at){
+     order=await this.price(order);
      const claimed=await this.db.rpc('pr_tbank_claim',{p_order:order.id,p_step:'charge'});
      if(claimed){
       let charged;
-      try{charged=await this.gateway('Charge',{order_id:order.id,payment_id:order.payment_id,rebill_id:claimed.rebill_id});}
+      try{charged=await this.gateway('Charge',{order_id:order.id,payment_id:order.payment_id,rebill_id:claimed.rebill_id,amount_kopecks:order.amount_kopecks});}
       catch(e){await this.record(order,'Charge',{},true);throw e;}
       await this.record(order,'Charge',charged);
       if(charged.Success===false){
@@ -139,9 +158,16 @@ export class TBank{
     if(state.Success===true&&state.OrderId===order.id)await this.db.rpc('pr_tbank_event',{p_body:state});
     else await this.db.patch('pr_tbank_orders',{last_error:'reconciliation_pending'},{id:'eq.'+order.id,last_error:'is.null',confirmed_at:'is.null'});
     if(new Date(order.expires_at)<=new Date()&&state.Status==='NEW')await this.fail(order,order.last_error||'payment_not_completed');
-   }catch{await this.db.patch('pr_tbank_orders',{last_error:'reconciliation_pending'},{id:'eq.'+order.id,last_error:'is.null',confirmed_at:'is.null'});}
+   }catch(e){
+    if(['membership_unavailable','membership_price_changed'].includes(e.message)){
+     await this.db.patch('pr_tbank_orders',{last_error:e.message,attempts:Math.max(0,order.attempts),check_at:new Date(Date.now()+300000).toISOString()},{id:'eq.'+order.id,charge_started_at:'is.null'});
+     if(e.message==='membership_price_changed')await this.fail(order,e.message);
+     continue;
+    }
+    await this.db.patch('pr_tbank_orders',{last_error:'reconciliation_pending'},{id:'eq.'+order.id,last_error:'is.null',confirmed_at:'is.null'});}
   }
   await this.radar.flush();return {processed:rows?.length||0};
  }
 }
+
 

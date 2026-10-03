@@ -158,7 +158,7 @@ export class Radar{
     if(['home','start','upload','example','help'].includes(ref))return this.showScreen(job,user,ref);
     return;
    }
-   if(action==='billing'){if(ref==='buy')return this.billing.menu(job,id,true);if(ref==='cancel')return this.billing.cancelMenu(job,id,true);if(ref==='upgrade')return this.billing.menu(job,id);return;}
+   if(action==='billing'){if(ref==='buy')return this.billing.menu(job,id,true,Number(rowIndex)||null);if(ref==='cancel')return this.billing.cancelMenu(job,id,true);if(ref==='upgrade')return this.billing.menu(job,id);return;}
    if(action==='forget'&&ref==='yes'){await this.billing.cancel(id);await this.db.rpc('pr_forget',{p_user:id});await this.telegram('sendMessage',{chat_id:id,text:'Ваши портфели и история удалены. Рассылка и продление подписки остановлены. Записи расчётов сохранены.'}).catch(()=>{});return;}
    if(!['save','save_notes','partial','replace','cancel','edit'].includes(action))return;
    const imp=(await this.db.get('pr_imports',{id:'eq.'+ref,user_id:'eq.'+id,limit:1}))[0];
@@ -466,7 +466,7 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
  const db=dbOverride||new Database(env.SUPABASE_URL,env.SUPABASE_SERVICE_ROLE_KEY);
  return async req=>{
   const path=new URL(req.url).pathname.split('/').filter(Boolean).at(-1),json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
-  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.8.3',status:'running'});
+  if(req.method==='GET'&&path==='health')return json({service:'portfolio-radar',version:'0.8.4',status:'running'});
   if(req.method!=='POST')return json({error:'not_found'},404);
   try{
    const radar=new Radar(db,env);await radar.init();
@@ -487,6 +487,12 @@ export function createHandler(env,waitUntil=()=>{},dbOverride){
     waitUntil(radar.work().catch(()=>console.error('portfolio_worker_failed')));return json({ok:true});
    }
    if(!timingSafe(req.headers.get('x-portfolio-worker-secret'),radar.config.worker_secret))return json({error:'unauthorized'},401);
+   if(path==='community-audit'){
+    const data=await req.json();
+    if(!Number.isSafeInteger(data?.user_id)||data.user_id<=0)return json({error:'invalid_user'},400);
+    const {membership}=await import('./community.js');
+    return json(await membership(radar.config,data.user_id));
+   }
    if(path==='billing-audit'){
     const raw=await req.text();if(raw.length>200)return json({error:'too_large'},413);
     let data;try{data=JSON.parse(raw);}catch{return json({error:'invalid_request'},400);}
