@@ -46,23 +46,38 @@ export class Insights{
   }
   return r;
  }
- async body(user,report,section='summary',page=0,access=null){
+ async bodies(user,report,section='summary',access=null,{complete=false}={}){
   access ||= await this.radar.billing.access(user);
   const current=access.tier==='free'?await this.accounts(user):null;
   const snapshot=filterSnapshot(report.snapshot,access,current);
   if(report.kind==='first')snapshot.initial_pending=(await this.db.get('pr_initial_reports',{user_id:'eq.'+user,limit:1}))[0]?.state==='queued';
   const pages=reportPages(report,snapshot,section,access);
-  if(!Number.isInteger(page)||page<0||page>=pages.length)return null;
-  const keyboard=snapshot.empty_portfolio?[[{text:'📸 Добавить позиции',callback_data:'ui:upload'},{text:'Главный экран',callback_data:'ui:home'}]]:reportKeyboard(report.id,section,access,page,pages.length);
-  let text=pages[page];
-  if(section==='summary'&&page===0){const offer=await this.radar.pools.teaser(access);if(text.length+offer.length<3900)text+='\n\n'+offer;keyboard.push(LP_BUTTON);if(lpPaid(access))keyboard.push(TOP5_BUTTON);}
-  return {chat_id:user,text,parse_mode:'HTML',link_preview_options:{is_disabled:true},reply_markup:{inline_keyboard:keyboard}};
+  const offer=section==='summary'?await this.radar.pools.teaser(access):'';
+  return pages.map((part,page)=>{
+   const last=page===pages.length-1;
+   const keyboard=snapshot.empty_portfolio?[[{text:'📸 Добавить позиции',callback_data:'ui:upload'},{text:'Главный экран',callback_data:'ui:home'}]]:reportKeyboard(report.id,section,access,page,complete?1:pages.length);
+   let text=part;
+   if(section==='summary'){
+    if(last&&text.length+offer.length+2<3900&&offer)text+='\n\n'+offer;
+    keyboard.push(LP_BUTTON);if(lpPaid(access))keyboard.push(TOP5_BUTTON);
+   }
+   return {chat_id:user,text,parse_mode:'HTML',link_preview_options:{is_disabled:true},...(!complete||last?{reply_markup:{inline_keyboard:keyboard}}:{})};
+  });
  }
- async sendReport(job,user,report,section='summary',page=0,{automatic=false}={}){
-  const access=await this.radar.billing.access(user),body=await this.body(user,report,section,page,access);
+ async body(user,report,section='summary',page=0,access=null,{complete=false}={}){
+  if(!Number.isInteger(page)||page<0)return null;
+  return (await this.bodies(user,report,section,access,{complete}))[page]||null;
+ }
+ async sendReport(job,user,report,section='summary',page=0,{automatic=false,complete=false}={}){
+  complete=section==='summary'&&page===0&&(complete||automatic);
+  const access=await this.radar.billing.access(user),bodies=await this.bodies(user,report,section,access,{complete});
+  const body=Number.isInteger(page)&&page>=0?bodies[page]:null;
   if(!body)return this.radar.reply(job,user,'Эта страница недоступна. /report — последний готовый обзор.');
-  const dedup=automatic&&report.kind==='first'?`initial:${user}:summary`:`${job.id}:report:${report.id}:${section}:${page}`;
-  await this.db.post('pr_outbox',{dedup_key:dedup,user_id:user,body:{...body,_portfolius:{report_id:report.id,section,page,automatic,kind:report.kind}}},{on_conflict:'dedup_key'},'resolution=ignore-duplicates,return=minimal');
+  for(const index of complete?bodies.map((_,i)=>i):[page]){
+   // Keep the legacy first-page key so a worker retry cannot send it twice.
+   const dedup=automatic&&report.kind==='first'?`initial:${user}:summary${index?':'+index:''}`:`${job.id}:report:${report.id}:${section}:${index}`;
+   await this.db.post('pr_outbox',{dedup_key:dedup,user_id:user,body:{...bodies[index],_portfolius:{report_id:report.id,section,page:index,automatic,complete,kind:report.kind}}},{on_conflict:'dedup_key'},'resolution=ignore-duplicates,return=minimal');
+  }
  }
  async open(job,user,section='summary',id=null,page=0){
   if(!reportSections.has(section))return;
@@ -74,7 +89,7 @@ export class Insights{
   }
   if(!report)return this.radar.reply(job,user,'Этот выпуск недоступен. /report — последний готовый обзор. Если портфель ещё не добавлен, пришлите его скриншоты. Архив прошлых выпусков открыт в подписке.',[[{text:'📸 Добавить портфель',callback_data:'ui:upload'},{text:'💎 Подписка',callback_data:'billing:upgrade'}]]);
   await this.event(user,'report_open',job.id+':'+report.id+':'+section);
-  return this.sendReport(job,user,report,section,page);
+  return this.sendReport(job,user,report,section,page,{complete:!id});
  }
  async daily(job,user,all,view,quotes,news,market,facts={},fx=null){
   const serviceDay=newsDay(new Date(job.payload.news_as_of)),previous=await this.db.get('pr_reports',{user_id:'eq.'+user.chat_id,kind:'eq.daily',service_day:'lt.'+serviceDay,order:'service_day.desc',limit:7});
@@ -110,7 +125,7 @@ export class Insights{
   const from=newsDay(new Date(Date.now()-6*86400000)),reports=await this.db.get('pr_reports',{user_id:'eq.'+user,kind:'eq.daily',service_day:'gte.'+from,order:'service_day.asc',limit:7});
   if(!reports.length){if(!automatic)return this.radar.reply(job,user,'Для итогов недели нужен хотя бы один сохранённый дневной выпуск. Отчёт появится после первой сводки.');return;}
   const snapshot=weeklySnapshot(reports),report=await this.save(user,'weekly',newsDay(),snapshot);
-  return this.sendReport(job,user,report,'summary',0,{automatic});
+  return this.sendReport(job,user,report,'summary',0,{automatic,complete:true});
  }
  async initialAllowed(job){
   if(job.job_key!=='initial:'+job.user_id)return false;
@@ -177,7 +192,7 @@ export class Insights{
   if(guard.requires_full&&!fullAccess(access))return {...body,text:'Полный доступ закончился. Ответы по портфелю доступны в подписке. /subscribe — подключение.'};
   if(guard.report_id){
    const report=await this.readable(row.user_id,guard.report_id,access);if(!report)return null;
-   return this.body(row.user_id,report,guard.section,guard.page,access);
+   return this.body(row.user_id,report,guard.section,guard.page,access,{complete:guard.complete});
   }
   return body;
  }

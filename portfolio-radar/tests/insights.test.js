@@ -15,6 +15,7 @@ const accounts=[{id:'account',name:'Main',positions,updated_at:now.toISOString()
 const snapshot=()=>({accounts,as_of:now.toISOString(),total_assets:20,
  quotes:Object.fromEntries(positions.map((p,i)=>[p.key,{status:'ok',price:100+i,currency:'RUB',change_pct:i,as_of:now.toISOString(),url:'https://issuer.example/quote'}])),
  news:Object.fromEntries(positions.map(p=>[p.key,{status:'ok',items:[{fact:'News for '+p.name,relevance:'Explanation',url:'https://issuer.example/'+p.key,published_at:now.toISOString(),event_date:now.toISOString()}],events:[{title:'Event '+p.name,date:tomorrow,url:'https://issuer.example/event/'+p.key}]}])),facts:{}});
+const longSnapshot=()=>{const s=snapshot();for(const n of Object.values(s.news))n.items[0].fact+=' — issuer published its quarterly earnings and announced a dividend for shareholders.'.repeat(3);return s;};
 
 function fixture(){
  const reports=[],outbox=[],events=[],replies=[];let access=paid;
@@ -98,6 +99,81 @@ test('weekly price changes compare snapshots instead of adding daily percentages
  const weekly=weeklySnapshot([{service_day:'2026-09-10',snapshot:a},{service_day:'2026-09-14',snapshot:b}]);
  assert.ok(Math.abs(weekly.week_change.a0-10)<1e-10);assert.equal(weekly.days_count,2);assert.equal(weekly.news.a0.items.length,1);
  assert.match(summaryText(weekly,paid,{weekly:true}),/2 из 7/);
+ const details=reportPages({kind:'weekly'},weekly,'assets',paid).join('\n');
+ assert.match(details,/\+10% за период/);assert.doesNotMatch(details,/\+50%/);
+});
+
+test('full overview includes all price changes and news, distinguishes missing data and lists unresolved positions',()=>{
+ const s=snapshot();s.accounts=structuredClone(accounts);
+ s.accounts[0].positions.push({key:'unknown',name:'Unresolved token',verified:false,issue:'Ambiguous ticker'});
+ s.news.a1={status:'ok',items:[]};s.news.a2={status:'unavailable',items:[]};delete s.quotes.a2;
+ s.previous_story_ids=[storyId(s.news.a3.items[0])];
+ const text=reportPages({kind:'daily'},s,'summary',paid).join('\n');
+ for(const p of positions)assert.ok(text.includes(p.name+' · '+(p.key==='a2'?'котировка недоступна':(Number(p.key.slice(1))>0?'+':'')+p.key.slice(1)+'%')),p.name);
+ for(const p of positions.filter(p=>!['a1','a2','a3'].includes(p.key)))assert.ok(text.includes('News for '+p.name),p.name);
+ assert.doesNotMatch(text,/News for Holding_3\b/);
+ assert.match(text,/Holding_1 · H1<\/b>\nЗначимых подтверждённых новостей/);
+ assert.match(text,/Holding_2 · H2<\/b>\nНе удалось проверить новости/);
+ assert.match(text,/Holding_3 · H3<\/b>\nНовых событий нет; ранее показанные/);
+ assert.match(text,/нужно уточнить: 1/);assert.match(text,/Unresolved token/);assert.match(text,/\/edit/);
+ assert.match(text,/Позиций в сохранённых счетах: 21 · определённых активов в обзоре: 20/);
+ const weekly=summaryText({...s,week_change:{a0:0,a19:-5},days_count:6},{...paid},{weekly:true});
+ assert.match(weekly,/Holding_0 · 0%/);assert.match(weekly,/Holding_1 · нет сопоставимых снимков/);
+ assert.match(weekly,/Holding_19 · -5%/);assert.match(weekly,/News for Holding_3\b/);
+});
+
+test('Telegram reports replace embedded Markdown citations with safe source links in summary and details',()=>{
+ const s=snapshot();s.news.a0.items[0].fact='Company update. ([issuer.example](https://issuer.example/news?utm_source=openai))';
+ s.news.a0.items[0].url='https://issuer.example/news?utm_source=openai';
+ s.news.a0.items[0].relevance='Read [the announcement](https://issuer.example/news). <script>unsafe</script>';
+ s.market={items:[s.news.a0.items[0]]};
+ for(const section of ['summary','news','market']){
+  const text=reportPages({kind:'daily'},s,section,paid).join('\n');
+  assert.match(text,/Company update\./);assert.match(text,/<a href="https:\/\/issuer.example\/news">Источник<\/a>/);
+  assert.doesNotMatch(text,/utm_source|\]\(https:|<script>|\(\)/);
+ }
+ assert.match(reportPages({kind:'daily'},s,'news',paid).join('\n'),/Read the announcement\. &lt;script&gt;/);
+});
+
+test('all parts of automatic reports and report commands reach the outbox exactly once without provider calls',async()=>{
+ for(const kind of ['daily','first','weekly']){
+  const f=fixture(),report={id,user_id:42,kind,service_day:today,snapshot:longSnapshot()};f.reports.push(report);
+  const originalGet=f.db.get;f.db.get=(table,q)=>table==='pr_initial_reports'?Promise.resolve([{state:'ready'}]):originalGet(table,q);
+  await f.radar.insights.sendReport({id:123},42,report,'summary',0,{automatic:true});
+  const count=f.outbox.length;assert.ok(count>1);
+  await f.radar.insights.sendReport({id:123},42,report,'summary',0,{automatic:true});assert.equal(f.outbox.length,count);
+  const delivered=await Promise.all(f.outbox.map(row=>f.radar.insights.deliveryBody(row)));
+  for(const [i,body] of delivered.entries()){
+   assert.ok(body.text.includes(`часть ${i+1} из ${count}`));assert.ok(body.text.length<4096);
+   assert.equal(!!body.reply_markup,i===count-1);
+  }
+  for(const p of positions)assert.ok(delivered.map(b=>b.text).join('\n').includes('News for '+p.name));
+  f.outbox.length=0;
+  await f.radar.insights.open({id:124},42,'summary',id,1);assert.equal(f.outbox.length,1);
+  assert.equal(f.outbox[0].body._portfolius.page,1);assert.ok(f.outbox[0].body.reply_markup);
+  f.outbox.length=0;
+  if(kind!=='weekly'){await f.radar.insights.open({id:125},42);assert.ok(f.outbox.length>1);}
+ }
+});
+
+test('queued multi-part reports suppress extra premium pages after downgrade and keep all first three assets',async()=>{
+ const f=fixture(),report={id,user_id:42,kind:'daily',service_day:today,snapshot:longSnapshot()};f.reports.push(report);
+ await f.radar.insights.sendReport({id:1},42,report,'summary',0,{automatic:true});assert.ok(f.outbox.length>1);
+ f.setAccess(free);
+ const delivered=(await Promise.all(f.outbox.map(row=>f.radar.insights.deliveryBody(row)))).filter(Boolean);
+ assert.equal(delivered.length,1);
+ const body=JSON.stringify(delivered);assert.doesNotMatch(body,/Holding_(?:[3-9]|1\d)\b|issuer\.example\/a(?:[3-9]|1\d)\b/);
+ for(const p of positions.slice(0,3))assert.ok(body.includes('News for '+p.name));
+ assert.match(body,/Ещё 17/);assert.ok(delivered[0].reply_markup);
+});
+
+test('a large permitted portfolio remains complete without oversized Telegram paragraphs',()=>{
+ const s=snapshot(),ps=Array.from({length:500},(_,i)=>({...positions[0],key:'large'+i,name:'Large holding '+i,symbol:'L'+i,provider_id:'L'+i}));
+ s.accounts=[{...accounts[0],positions:ps}];s.total_assets=500;s.news={};s.quotes={};
+ const pages=reportPages({kind:'daily'},s,'summary',paid);
+ assert.ok(pages.length>1);for(const page of pages)assert.ok(page.length<3600);
+ assert.match(pages.join('\n'),/Large holding 499 · котировка недоступна/);
+ assert.match(pages.join('\n'),/Large holding 499 · L499<\/b>\nНе удалось проверить новости/);
 });
 
 test('bond percentage quote is never treated as a ruble unit price; unknown holdings disclose denominator',()=>{
@@ -176,7 +252,9 @@ test('Q&A sends no search tools, bounds output and rejects invented citation ind
 test('weekly and archive navigation reads stored reports and never calls providers',async()=>{
  const f=fixture();f.reports.push({id,user_id:42,kind:'daily',service_day:today,snapshot:snapshot()});
  await f.radar.insights.week({id:1},42);await f.radar.insights.archive({id:2},42);
- assert.equal(f.reports.filter(r=>r.kind==='weekly').length,1);assert.equal(f.outbox.length,1);assert.match(f.replies.at(-1).text,/Архив/);
+ assert.equal(f.reports.filter(r=>r.kind==='weekly').length,1);assert.ok(f.outbox.length>1);assert.match(f.replies.at(-1).text,/Архив/);
+ const delivered=(await Promise.all(f.outbox.map(row=>f.radar.insights.deliveryBody(row)))).map(b=>b.text).join('\n');
+ for(const p of positions)assert.ok(delivered.includes('News for '+p.name));
 });
 
 test('a weekly preview includes a later daily release and cannot regress to an older preview',async()=>{
@@ -193,7 +271,7 @@ test('a weekly preview includes a later daily release and cannot regress to an o
  assert.ok(after.snapshot.news.a0.items.some(n=>n.fact==='Later daily announcement'));
  await f.radar.insights.save(42,'weekly',today,before.snapshot);
  assert.equal(after.snapshot.days_count,2);
- const delivered=await f.radar.insights.deliveryBody(f.outbox.at(-1));assert.match(delivered.text,/2 из 7/);
+ const delivered=await f.radar.insights.deliveryBody(f.outbox.find(row=>row.dedup_key.startsWith('11:')&&row.body._portfolius.page===0));assert.match(delivered.text,/2 из 7/);
 });
 
 test('an empty first view explains the wait rather than presenting an unresearched daily conclusion',()=>{
