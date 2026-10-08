@@ -1,0 +1,14 @@
+{
+  "date_utc": "2026-09-13",
+  "gateway": "yield-radar-bo7y.vercel.app/api/portfolio-billing",
+  "endpoint": "https://securepay.tinkoff.ru/v2/Init",
+  "root_cause": "RedirectDueDate was serialized with fractional seconds and Z instead of whole seconds and a numeric UTC offset",
+  "checks": [
+    {"scenario": "initial recurring subscription, corrected deadline", "http": 200, "Success": true, "ErrorCode": "0", "Status": "NEW", "Amount": 29000, "has_payment_url": true},
+    {"scenario": "ordinary Init, old deadline format", "http": 200, "Success": false, "ErrorCode": "9999", "has_payment_url": false},
+    {"scenario": "ordinary Init, corrected deadline format", "http": 200, "Success": true, "ErrorCode": "0", "Status": "NEW", "Amount": 29000, "has_payment_url": true}
+  ],
+  "no_card_details_submitted": true,
+  "no_charge_called": true,
+  "documentation": "https://developer.tbank.ru/eacq/api/init"
+}
