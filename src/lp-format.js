@@ -34,7 +34,7 @@ export function opportunityLine(o){
  const a=o.current_estimate,b=o.best_estimate,coverage=`Сопоставлено альтернатив: ${o.coverage.checked}/${o.coverage.total}.`;
  if(o.status==='keep')return `✅ ${title}\n${range}\n${link(o.current)} · оценка для диапазона ${pct(a.apr)} APR. При текущих условиях преимущество от перехода не найдено среди сопоставимых вариантов.\n${coverage}`;
  const labels={opportunity:'🟢 Выше оценка комиссий в вашем диапазоне',costs:'🔴 Расходы съедают прибавку за 30 дней',spike:'🟡 Преимущество только при суточном темпе',small:'🟡 Разница небольшая',review:'⚠️ Нужна проверка пула'};
- const lines=[`${labels[o.status]||'Сравнение'}\n${title}`,range,`${link(o.current)} → ${link(o.best)}`,`Оценка для диапазона: ${pct(a.apr)} → <b>${pct(b.apr)} APR</b> · +${o.delta.toFixed(2)} п.п.`];
+ const lines=[`${labels[o.status]||'Сравнение'}\n${title}`,range,`${link(o.current)} · комиссия ${pct(o.current.fee_tier_pct)} → ${link(o.best)} · комиссия ${pct(o.best.fee_tier_pct)}`,`Оценка для диапазона: ${pct(a.apr)} → <b>${pct(b.apr)} APR</b> · +${o.delta.toFixed(2)} п.п.`];
  if(a.rounded||b.rounded)lines.push(`Эффективные границы после шага цены: ${html(o.current.platform)} ${effective(a)}; ${html(o.best.platform)} ${effective(b)} USDC.`);
  if(o.monthly!==null&&o.delta>0){
   lines.push(`Разница на ту же сумму: <b>≈ +${usd(o.monthly)} за 30 дней</b> при неизменных условиях.`);
