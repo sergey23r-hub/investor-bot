@@ -1,5 +1,5 @@
 import {PoolProvider,canonicalXStock} from './lp-provider.js';
-import {HOUR,correctPosition,normalizePosition,applyVenue,venueSuggestions,positionCandidates,candidateToken,withPool} from './lp-data.js';
+import {HOUR,correctPosition,normalizePosition,applyVenue,venueSuggestions,positionCandidates,candidateToken,withPool,anchorRange} from './lp-data.js';
 import {lpPaid,poolsView,previewText,teaser,matchingButtons,candidatesView,top5Summary} from './lp-format.js';
 import {extractPools} from './lp-extraction.js';
 import {portfolioProposals,opportunity,actionable,stableOpportunity} from './lp-opportunities.js';
@@ -56,6 +56,7 @@ export class Pools{
    return this.preview(job,user,imp,action==='pick'?Math.floor(Number(String(page).split('.')[0])/10):0);
   }
   if(action==='save'){
+   await this.anchorImport(user,ref);
    await this.db.rpc('pr_lp_commit',{p_user:user,p_import:ref});await this.event(user,'saved',ref);
    return this.open(job,user);
   }
@@ -86,8 +87,14 @@ export class Pools{
    if(imp)await this.db.patch('pr_lp_imports',{rows,last_edit_key:marker,updated_at:new Date().toISOString()},{id:'eq.'+imp.id,user_id:'eq.'+user,status:'eq.preview'});
    else imp=(await this.db.post('pr_lp_imports',{user_id:user,status:'preview',base_version:profile.version,rows,last_edit_key:marker}))[0];
   }
+  await this.anchorImport(user,imp.id,pools);
   await this.db.rpc('pr_lp_commit',{p_user:user,p_import:imp.id});await this.event(user,'saved',imp.id);
   return this.open(job,user);
+ }
+ async anchorImport(user,id,pools=null){
+  const imp=(await this.db.get('pr_lp_imports',{id:'eq.'+id,user_id:'eq.'+user,status:'eq.preview',limit:1}))[0];if(!imp)return;
+  const all=pools||(await this.markets()).flatMap(m=>m.data?.pools||[]),rows=imp.rows.map(r=>anchorRange(r,all));
+  if(JSON.stringify(rows)!==JSON.stringify(imp.rows))await this.db.patch('pr_lp_imports',{rows},{id:'eq.'+id,user_id:'eq.'+user,status:'eq.preview',last_edit_key:imp.last_edit_key?'eq.'+imp.last_edit_key:'is.null'});
  }
  async match(job,user){
   if(!await this.require(job,user))return;
@@ -237,12 +244,12 @@ export class Pools{
     // Roll out the new shared chain snapshot one asset per scheduled job.
     // Existing rolling-fee observations keep their actual timestamps; this is
     // not a user-triggered market refresh and cannot generate an alert alone.
-    const initial=symbols.map(s=>bySymbol.get(s)).find(m=>m&&m.data.schema_version!==2);
+    const initial=symbols.map(s=>bySymbol.get(s)).find(m=>m&&m.data.schema_version!==3);
     if(initial){
      const result=await this.provider.rangeStates(initial.symbol,initial.data.pools||[]);
      const pools=(initial.data.pools||[]).map(p=>p.chain==='solana'&&p.concentrated&&['Raydium','Orca'].includes(p.platform)?{...p,clmm_state:result.states?.[p.key]||{status:'unavailable',reason:result.error||'range_data_missing'}}:p);
      const states=pools.filter(p=>p.clmm_state),checked=states.filter(p=>p.clmm_state.status==='ok').length;
-     const data={...initial.data,pools,schema_version:2,coverage:[...(initial.data.coverage||[]),{source:'Диапазоны Raydium / Orca · Solana',status:checked===states.length&&checked?'ok':checked?'partial':'unavailable',checked,total:states.length}]};
+     const data={...initial.data,pools,schema_version:3,coverage:[...(initial.data.coverage||[]),{source:'Диапазоны Raydium / Orca · Solana',status:checked===states.length&&checked?'ok':checked?'partial':'unavailable',checked,total:states.length}]};
      await this.db.post('pr_lp_market',{symbol:initial.symbol,data,updated_at:initial.updated_at},{on_conflict:'symbol'},'resolution=merge-duplicates,return=minimal');
     }
    }

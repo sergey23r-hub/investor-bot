@@ -1,5 +1,5 @@
 // Public market data only. Symbols are labels; contract + chain establish identity.
-import {compareRanges} from './lp-range.js';
+import {compareRanges,rangeEstimate} from './lp-range.js';
 export const LP_VERSION=2;
 export const HOUR=3600000;
 export const chainId=n=>({Solana:'solana',Ethereum:'ethereum',Arbitrum:'arbitrum',Mantle:'mantle',HyperEVM:'hyperevm','Hyperliquid L1':'hyperevm',Ink:'ink',BinanceSmartChain:'bsc',BSC:'bsc',Monad:'monad',Optimism:'optimism',XLayer:'xlayer',Ton:'ton',TON:'ton',Tron:'tron',TRON:'tron',Base:'base',Avalanche:'avalanche',Polygon:'polygon'}[n]||String(n||'').toLowerCase());
@@ -126,6 +126,9 @@ export function comparison(row,pools,now=Date.now()){
 export function normalizePosition(r){
  const text=(v,n=80)=>typeof v==='string'?v.trim().slice(0,n):null;
  const row={symbol:text(r.symbol,24),network:text(r.network,32),platform:text(r.platform,40),pool_address:text(r.pool_address,100),capital_usd:positive(r.capital_usd),shown_rate:positive(r.shown_rate),rate_type:['APR','APY'].includes(r.rate_type)?r.rate_type:null,rate_window:text(r.rate_window,40),rate_scope:text(r.rate_scope,40),range_status:['in','out','unknown'].includes(r.range_status)?r.range_status:'unknown',range_lower:positive(r.range_lower),range_upper:positive(r.range_upper),fee_tier_pct:positive(r.fee_tier_pct),issue:text(r.issue,160)};
+ row.range_quote=['raw','scaled'].includes(r.range_quote)?r.range_quote:null;
+ row.range_basis_multiplier=positive(r.range_basis_multiplier);row.range_basis_stock=text(r.range_basis_stock,100);
+ row.range_captured_at=typeof r.range_captured_at==='string'&&Number.isFinite(Date.parse(r.range_captured_at))?new Date(r.range_captured_at).toISOString():null;
  row.pool_type=genericType(r.pool_type)||genericType(row.platform);
  row.captured_at=typeof r.captured_at==='string'&&Number.isFinite(Date.parse(r.captured_at))?new Date(r.captured_at).toISOString():null;
  row.switch_cost_usd=positive(r.switch_cost_usd);
@@ -134,14 +137,26 @@ export function normalizePosition(r){
  if(row.pool_address&&!/^(?:0x(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})|[1-9A-HJ-NP-Za-km-z]{32,44}|[A-Za-z0-9_-]{48})$/.test(row.pool_address))row.pool_address=null;
  return row;
 }
+// Anchor a newly supplied range to its token denomination before confirmation.
+// Never apply today's multiplier retroactively to an old scaled screenshot.
+export function anchorRange(row,pools,now=Date.now()){
+ if(row.range_basis_multiplier>0&&row.range_basis_stock)return row;
+ const captured=Date.parse(row.range_captured_at||row.captured_at);
+ if(!Number.isFinite(captured)||now-captured>5*60000||captured>now+60000)return row;
+ const pool=resolvePosition(row,pools).pool;if(!pool||!fresh(pool,now))return row;
+ const estimate=rangeEstimate(row,pool,{existing:true,now,capture:true});
+ if(estimate.status!=='ok')return row;
+ return {...row,range_quote:estimate.range_quote,range_basis_multiplier:estimate.stock_multiplier,range_basis_stock:pool.stock_address};
+}
 export function correctPosition(rows,text){
  const match=text.match(/^\/poolfix(?:@\w+)?\s+(\d+)\s+(.+)$/iu);if(!match)return null;
  const index=Number(match[1])-1;if(index<0||index>=rows.length)throw Error('lp_row_missing');
  if(/^(удалить|delete)$/iu.test(match[2]))return rows.filter((_,i)=>i!==index);
- const fields={актив:'symbol',asset:'symbol',сеть:'network',chain:'network',площадка:'platform',platform:'platform',пул:'pool_address',pool:'pool_address',сумма:'capital_usd',capital:'capital_usd',комиссия:'fee_tier_pct',fee:'fee_tier_pct',расходы:'switch_cost_usd',cost:'switch_cost_usd',минимум:'range_lower',min:'range_lower',максимум:'range_upper',max:'range_upper'};
+ const fields={актив:'symbol',asset:'symbol',сеть:'network',chain:'network',площадка:'platform',platform:'platform',пул:'pool_address',pool:'pool_address',сумма:'capital_usd',capital:'capital_usd',комиссия:'fee_tier_pct',fee:'fee_tier_pct',расходы:'switch_cost_usd',cost:'switch_cost_usd',минимум:'range_lower',min:'range_lower',максимум:'range_upper',max:'range_upper',единицы:'range_quote',units:'range_quote'};
  const edits=[...match[2].matchAll(/([a-zа-я]+)=([^=]+?)(?=\s+[a-zа-я]+=|$)/giu)];if(!edits.length)throw Error('lp_fix_format');
  const next=rows.map(r=>({...r}));for(const e of edits){const field=fields[e[1].toLowerCase()];if(!field)throw Error('lp_fix_format');next[index][field]=['capital_usd','fee_tier_pct','switch_cost_usd','range_lower','range_upper'].includes(field)?e[2].trim().replace(',','.'):e[2].trim();}
  if(edits.some(e=>['range_lower','range_upper'].includes(fields[e[1].toLowerCase()]))&&!(Number(next[index].range_lower)>0&&Number(next[index].range_upper)>Number(next[index].range_lower)))throw Error('lp_range_invalid');
+ if(edits.some(e=>['range_lower','range_upper','range_quote','symbol'].includes(fields[e[1].toLowerCase()]))){next[index].range_basis_multiplier=null;next[index].range_basis_stock=null;next[index].range_captured_at=new Date().toISOString();}
  next[index]=normalizePosition(next[index]);return next;
 }
 

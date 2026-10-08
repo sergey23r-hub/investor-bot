@@ -121,4 +121,11 @@ test('queued opportunity signals recheck the exact alternative, range and benefi
  profile.positions[0].switch_cost_usd=null;profile.positions[0].range_lower=2;assert.equal(await h.radar.insights.deliveryBody(out),null);
  profile.positions[0].range_lower=.25;h.records.pr_lp_market[0].data.pools.push({...other,key:'different',address:'C'.repeat(44),fee_apr24h:60});assert.equal(await h.radar.insights.deliveryBody(out),null);
 });
+test('confirming a recent scaled screenshot saves its original denomination for later corporate actions',async()=>{
+ const h=harness(),p=h.radar.pools,state={status:'ok',version:1,observed_at:iso,slot:100,token_a:'stock',token_b:'usdc',decimals_a:0,decimals_b:0,liquidity:'10000',sqrt_price_x64:'18446744073709551616',tick_current:0,tick_spacing:1,lp_fee_share:.84,multiplier_a:2,multiplier_b:1};
+ h.records.pr_lp_market[0].data.pools=[{...pool,stock_address:'stock',usdc_address:'usdc',clmm_state:state}];
+ h.records.pr_lp_imports.push({id,user_id:42,status:'preview',base_version:3,rows:[{...row,pool_address:address,network:'Solana',platform:'Raydium',capital_usd:100,range_quote:'scaled',range_lower:.25,range_upper:2,captured_at:iso}]});
+ await p.callback({id:90},42,'save',id);
+ assert.equal(h.records.pr_lp_profiles[0].positions[0].range_basis_multiplier,2);assert.equal(h.commits,1);
+});
 

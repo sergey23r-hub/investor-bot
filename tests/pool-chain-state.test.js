@@ -11,6 +11,13 @@ const acct=(buf,owner)=>({owner,executable:false,data:[buf.toString('base64'),'b
 function ray(){const x=Buffer.alloc(1544);Buffer.from([247,237,227,245,215,195,222,70]).copy(x);x[40]=3;x[104]=1;x[136]=2;x[233]=6;x[234]=9;x.writeUInt16LE(8,235);x.writeBigUInt64LE(1000000000n,237);x.writeBigUInt64LE(1n,261);return acct(x,RAY);}
 function orca(){const x=Buffer.alloc(653);Buffer.from([63,149,209,12,225,128,99,9]).copy(x);x.writeUInt16LE(64,41);x.writeUInt16LE(1600,47);x.writeBigUInt64LE(2000000000n,49);x.writeBigUInt64LE(1n,73);x[132]=1;x[212]=2;return acct(x,ORCA);}
 function mint(d=6,owner=TOKEN,extension=null){const x=Buffer.alloc(extension===null?82:202);x[44]=d;x[45]=1;if(extension!==null){x[165]=1;x.writeUInt16LE(extension,166);x.writeUInt16LE(32,168);}return acct(x,owner);}
+function xstockMint({paused=false,hook=false,frozen=false,multiplier=1,newMultiplier=1,at=0}={}){
+ const extensions=[[4,Buffer.alloc(65)],[6,Buffer.from([frozen?2:1])],[12,Buffer.alloc(32)],[14,Buffer.alloc(64)],[25,Buffer.alloc(56)],[26,Buffer.alloc(33)],[18,Buffer.alloc(64)]];
+ const scaled=extensions.find(([t])=>t===25)[1];scaled.writeDoubleLE(multiplier,32);scaled.writeBigInt64LE(BigInt(at),40);scaled.writeDoubleLE(newMultiplier,48);
+ extensions.find(([t])=>t===26)[1][32]=paused?1:0;extensions.find(([t])=>t===14)[1][32]=hook?1:0;
+ const base=Buffer.alloc(166);base[44]=6;base[45]=1;base[165]=1;
+ return acct(Buffer.concat([base,...extensions.flatMap(([t,data])=>{const h=Buffer.alloc(4);h.writeUInt16LE(t);h.writeUInt16LE(data.length,2);return [h,data];})]),TOKEN22);
+}
 function cfg(){const x=Buffer.alloc(117);Buffer.from([218,244,33,104,203,203,43,111]).copy(x);x.writeUInt32LE(120000,43);x.writeUInt16LE(8,51);x.writeUInt32LE(40000,53);return acct(x,RAY);}
 const pool=(platform,address)=>({key:'solana:'+address,chain:'solana',platform,address,verified:true,concentrated:true,stock_address:a,usdc_address:b});
 const rp=pool('Raydium','11111111111111111111111111111115'),op=pool('Orca','11111111111111111111111111111116');
@@ -27,6 +34,13 @@ test('mint validation allows metadata and rejects transfer fees, unknown extensi
  assert.equal(decodeMint(mint(9)).decimals,9);assert.equal(decodeMint(mint(6,TOKEN22,12)).decimals,6);
  for(const extension of [1,10,14,25,26,999])assert.throws(()=>decodeMint(mint(6,TOKEN22,extension)));
  assert.throws(()=>decodeMint({...mint(),owner:RAY}));const bad=Buffer.from(mint().data[0],'base64');bad[45]=0;assert.throws(()=>decodeMint(acct(bad,TOKEN)));
+});
+test('xStocks extensions respect live pauses/hooks and scheduled split or dividend multipliers',()=>{
+ assert.equal(decodeMint(xstockMint()).multiplier,1);
+ assert.equal(decodeMint(xstockMint({multiplier:2,newMultiplier:3,at:200}),100).multiplier,2);
+ assert.equal(decodeMint(xstockMint({multiplier:2,newMultiplier:3,at:200}),201).multiplier,3);
+ assert.equal(decodeMint(xstockMint({multiplier:2,newMultiplier:3,at:200}),100).valid_until,200);
+ for(const options of [{paused:true},{hook:true},{frozen:true},{newMultiplier:NaN},{newMultiplier:0}])assert.throws(()=>decodeMint(xstockMint(options)));
 });
 test('collector batches public accounts, verifies configs and records a coherent fresh slot',async()=>{
  const accounts=new Map([[rp.address,ray()],[op.address,orca()],[a,mint(6)],[b,mint(9)],[config,cfg()]]),calls=[];
@@ -51,9 +65,9 @@ test('range snapshots and RPC failures are shared per asset and hour across user
 });
 test('scheduled rollout enriches one existing snapshot without refreshing its fees or quotes',async()=>{
  const iso=new Date().toISOString(),names=['MSFTx','TSLAx','NVDAx','SPYx','QQQx','COINx','AAPLx'];
- const markets=names.map(symbol=>({symbol,updated_at:iso,data:{symbol,checked_at:iso,schema_version:symbol==='MSFTx'?1:2,pools:[{...rp,observed_at:iso}],coverage:[]}}));
+ const markets=names.map(symbol=>({symbol,updated_at:iso,data:{symbol,checked_at:iso,schema_version:symbol==='MSFTx'?1:3,pools:[{...rp,observed_at:iso}],coverage:[]}}));
  const writes=[],radar={db:{rpc:async(name)=>name==='pr_lp_lock'?true:[],get:async()=>markets,post:async(t,row)=>writes.push(row)}};
  const p=new Pools(radar);let reads=0;p.provider.collect=async()=>{throw Error('no market refresh required');};p.provider.rangeStates=async(symbol,rows)=>{reads++;assert.equal(symbol,'MSFTx');return {states:{[rp.key]:{status:'ok'}}};};
- await p.work();assert.equal(reads,1);assert.equal(writes.length,1);assert.equal(writes[0].updated_at,iso);assert.equal(writes[0].data.checked_at,iso);assert.equal(writes[0].data.pools[0].observed_at,iso);assert.equal(writes[0].data.schema_version,2);
+ await p.work();assert.equal(reads,1);assert.equal(writes.length,1);assert.equal(writes[0].updated_at,iso);assert.equal(writes[0].data.checked_at,iso);assert.equal(writes[0].data.pools[0].observed_at,iso);assert.equal(writes[0].data.schema_version,3);
  assert.equal(writes[0].data.pools[0].clmm_state.status,'ok');
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {comparison,correctPosition,normalizePosition} from '../src/lp-data.js';
+import {comparison,correctPosition,normalizePosition,anchorRange} from '../src/lp-data.js';
 import {opportunity,actionable} from '../src/lp-opportunities.js';
 import {poolsView,previewText,opportunityLine} from '../src/lp-format.js';
 const now=Date.now(),iso=new Date(now).toISOString();
@@ -89,4 +89,28 @@ test('personal cards display range-specific estimates and identify unavailable c
  const view=poolsView({access:{tier:'paid'},profile:{positions:[row]},markets:[{data:{pools:[{...current,clmm_state:null},candidate]}}],now});
  assert.match(view.text,/Недостаточно данных/);assert.doesNotMatch(view.text,/Заметной.*прибавки.*не нашли/);
  const preview=previewText({rows:[row]},[current,candidate]);assert.match(preview.text,/0,25.*4.*USDC/);
+});
+test('scaled xStocks infer quotation from existing ticks and compare the same economic bounds',()=>{
+ const s={...state,multiplier_a:2,multiplier_b:1},pools=[current,candidate].map(p=>({...p,clmm_state:s}));
+ const lo=1.0001**-10000,hi=1.0001**10000;
+ const raw=comparison({...row,range_lower:lo,range_upper:hi},pools,now),saved=anchorRange({...row,captured_at:iso,range_lower:lo/2,range_upper:hi/2},pools,now),scaled=comparison(saved,pools,now);
+ assert.equal(raw.current_estimate.range_quote,'raw');assert.equal(scaled.current_estimate.range_quote,'scaled');
+ assert.ok(Math.abs(raw.monthly-scaled.monthly)<1e-6);
+ assert.equal(scaled.best_estimate.range_quote,'scaled');assert.equal(scaled.current_estimate.price,.5);
+ const ambiguous=pools.map(p=>({...p,clmm_state:{...s,multiplier_a:1.0001**100}}));
+ assert.equal(comparison({...row,range_lower:lo,range_upper:hi},ambiguous,now).reason,'range_quote_missing');
+ assert.equal(comparison({...row,range_lower:lo,range_upper:hi,range_quote:'raw'},ambiguous,now).delta>0,true);
+ const expired=pools.map(p=>({...p,clmm_state:{...s,multiplier_valid_until:Math.floor(now/1000)-1}}));
+ assert.equal(comparison({...row,range_lower:lo,range_upper:hi},expired,now).reason,'range_data_stale');
+});
+test('a multiplier change preserves captured scaled position ticks and does not reinterpret old screenshots',()=>{
+ const lo=1.0001**-10000,hi=1.0001**10000,twice=[current,candidate].map(p=>({...p,clmm_state:{...state,multiplier_a:2,multiplier_b:1}}));
+ const input={...row,range_quote:'scaled',range_lower:lo/2,range_upper:hi/2,captured_at:iso},saved=normalizePosition(anchorRange(input,twice,now));
+ assert.equal(saved.range_basis_multiplier,2);assert.equal(saved.range_basis_stock,'stock');
+ const a=comparison(saved,twice,now),four=twice.map(p=>({...p,clmm_state:{...p.clmm_state,multiplier_a:4}})),b=comparison(saved,four,now);
+ assert.equal(b.current_estimate.tick_lower,a.current_estimate.tick_lower);assert.equal(b.current_estimate.tick_upper,a.current_estimate.tick_upper);
+ assert.equal(b.current_estimate.in_range,true);assert.ok(Math.abs(b.monthly-a.monthly)<1e-6);assert.equal(b.current_estimate.requested_lower,lo/4);
+ assert.equal(comparison(input,four,now).reason,'range_quote_missing');
+ assert.equal(anchorRange({...input,captured_at:'2000-01-01'},four,now).range_basis_multiplier,undefined);
+ const edited=correctPosition([saved],'/poolfix 1 минимум=0.3 максимум=1.4');assert.equal(edited[0].range_basis_multiplier,null);
 });

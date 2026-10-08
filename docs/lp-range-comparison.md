@@ -1,4 +1,4 @@
-# Personal CLMM comparison (0.8.6)
+# Personal CLMM comparison (0.8.7)
 
 Personal recommendations compare the same saved USD capital, verified token contracts, network, and price bounds in USDC per stock. The pool-wide top-five ranking is an independent indicator, not a personal range estimate.
 
@@ -18,7 +18,7 @@ No rewards, token price appreciation/loss, impermanent loss, bridges, gas or uns
 
 ## Bounds and exclusions
 
-Canonical bounds are USDC per stock token. Extractor converts explicitly inverse quotations, otherwise leaves unknown bounds empty. Legacy saved bounds retain this convention and are shown for review. `/poolfix 1 минимум=150 максимум=180` corrects bounds through the existing confirmation flow.
+Canonical bounds are USDC per stock token. Extractor converts explicitly inverse quotations, otherwise leaves unknown bounds empty. Raw and scaled-UI denominations are both supported. For legacy screenshots, denomination is inferred only if both bounds uniquely match the current pool tick grid within six-decimal screenshot rounding; ambiguity blocks recommendations. Explicitly identified denomination is preserved. Before confirming a recent range, its stock mint and capture-time multiplier are anchored. Scaled bounds are subsequently converted using this captured basis so splits/dividends cannot change the original physical position ticks. Old scaled screenshots without a trusted capture basis fail closed; editing bounds clears the basis. The same denomination is propagated to alternatives; token UI multipliers enter both price and amount conversion. `/poolfix 1 минимум=150 максимум=180` corrects bounds through the existing confirmation flow.
 
 Nearest allowed ticks are used. Effective bounds are displayed if changed. Reject deviations over the smaller of 1% of a bound or 5% of requested width, and rounding that changes range activity. Pools must use exactly the same mints and network; prices must agree within 0.5%. Chain and fee observations across venues must be within 10 minutes. Chain snapshots expire after 2 hours; pool fee observations retain the existing 4-hour freshness checks.
 
@@ -26,9 +26,9 @@ Missing bounds, capital, verified states, fees, alternatives, or unsupported ven
 
 ## Shared data acquisition
 
-Raydium CLMM and Orca Whirlpool on Solana are supported. Read-only `getMultipleAccounts` requests to the public Solana mainnet RPC obtain program-owned pool states, configs and mint decimals. Owner, Anchor discriminator, pair identities, config tick spacing, initialized mint and extension type are validated. Raydium LP share excludes protocol/fund fees; Orca excludes protocol fees. Raydium paused deposit/withdrawal/fee-collection/swap states are excluded. Unsupported mint extensions and other pool models remain unavailable.
+Raydium CLMM and Orca Whirlpool on Solana are supported. Read-only `getMultipleAccounts` requests to the public Solana mainnet RPC obtain program-owned pool states, configs and mint decimals. Owner, Anchor discriminator, pair identities, config tick spacing, initialized mint and extension type are validated. Raydium LP share excludes protocol/fund fees; Orca excludes protocol fees. Raydium paused deposit/withdrawal/fee-collection/swap states are excluded. Initialized xStocks Token-2022 extensions are checked individually: frozen defaults, active hooks and paused transfers block estimates. Scaled UI multipliers, including their scheduled effective time, are decoded; snapshots expire before a scheduled change. Metadata, authorities and opt-in confidential-transfer configuration do not change public pool balances. Other unsupported extensions/models remain unavailable.
 
-A dependency-discovery read is followed by an atomic pool/config/mint read at a confirmed slot. At most 96 pools per asset, split into batches of 32, are enriched per scheduled job. Successes and failures are shared per asset/hour through pr_lp_fetches. No per-user request, wallet connection, signing or trading is introduced. Schema-v1 cached markets are enriched one asset per scheduled job without updating old fee timestamps or issuing opportunity alerts from that enrichment alone.
+A dependency-discovery read is followed by an atomic pool/config/mint read at a confirmed slot. At most 96 pools per asset, split into batches of 32, are enriched per scheduled job. Successes and failures are shared per asset/hour through pr_lp_fetches. No per-user request, wallet connection, signing or trading is introduced. Earlier-schema cached markets are enriched one asset per scheduled job without updating old fee timestamps or issuing opportunity alerts from that enrichment alone.
 
 External API/RPC errors produce an explicit unavailable state and hourly retry through the normal scheduler. They do not bypass provider restrictions or fabricate fresh observations. No schema or billing changes are required.
 
@@ -38,6 +38,8 @@ External API/RPC errors produce an explicit unavailable state and hourly retry t
 - https://github.com/raydium-io/raydium-clmm/blob/master/programs/amm/src/states/config.rs
 - https://github.com/orca-so/whirlpools/blob/main/programs/whirlpool/src/state/whirlpool.rs
 - https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs
+- https://docs.xstocks.fi/developers/multipliers
+- https://solana.com/news/case-study-xstocks
 - https://solana.com/docs/rpc/http/getmultipleaccounts
 
 Tests cover independently calculated dollar flows, token order and unequal decimals, exact tick boundaries, missing/stale states, rounding, paused operations, malformed accounts, fee shares, caching, rollout, cost decisions, UI length and paid delivery guards.

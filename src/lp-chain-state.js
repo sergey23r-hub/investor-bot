@@ -27,19 +27,32 @@ export function decodePoolState(pool,account){
  if(!(Number(s.liquidity)>0)||!(Number(s.sqrt_price_x64)>0)||s.tick_spacing<1||s.tick_spacing>=32768||Math.abs(s.tick_current)>443636)throw Error('range_empty');
  return s;
 }
-export function decodeMint(account){
+export function decodeMint(account,unixTime=Math.floor(Date.now()/1000)){
  if(![TOKEN,TOKEN22].includes(account?.owner))throw Error('range_mint');
  const b=bytes(account,account.owner,82);if(b[45]!==1||b[44]>18)throw Error('range_mint');
  if(account.owner===TOKEN&&b.length!==82)throw Error('range_mint');
+ let multiplier=1,valid_until=null;const extensions=[];
  if(b.length>82){
   if(b.length<166||b[165]!==1||b.slice(82,165).some(n=>n!==0))throw Error('range_mint');
-  // Metadata/authority extensions do not alter token units or swap fee math.
-  // Unknown, transfer-fee, hook, scaled-amount, interest and pausable mints
-  // are excluded until their economics/availability have a dedicated model.
+  // xStocks initialize extra Token-2022 features even while disabled. Validate
+  // their live settings, rather than treating every initialized feature as on.
   const allowed=new Set([3,12,18,19,20,21,22,23]);
-  for(let o=166;o+2<=b.length;){const type=small(b,o,2);if(type===0)break;if(o+4>b.length)throw Error('range_mint');const len=small(b,o+2,2);if(!allowed.has(type)||o+4+len>b.length)throw Error('range_mint_extension');o+=4+len;}
+  for(let o=166;o+2<=b.length;){
+   const type=small(b,o,2);if(type===0)break;if(o+4>b.length)throw Error('range_mint');const len=small(b,o+2,2),start=o+4;
+   if(start+len>b.length||extensions.includes(type))throw Error('range_mint');extensions.push(type);
+   if(type===4){if(len!==65)throw Error('range_mint');} // confidential-transfer opt-in does not scale public balances
+   else if(type===6){if(len!==1||b[start]!==1)throw Error('range_mint_frozen');}
+   else if(type===14){if(len!==64||b.slice(start+32,start+64).some(n=>n!==0))throw Error('range_mint_hook');}
+   else if(type===26){if(len!==33||b[start+32]!==0)throw Error('range_mint_paused');}
+   else if(type===25){
+    if(len!==56)throw Error('range_mint');const view=new DataView(b.buffer),old=view.getFloat64(start+32,true),at=Number(view.getBigInt64(start+40,true)),next=view.getFloat64(start+48,true);
+    if(![old,next].every(v=>Number.isFinite(v)&&v>0)||!Number.isSafeInteger(at))throw Error('range_mint_multiplier');
+    multiplier=unixTime>=at?next:old;valid_until=at>unixTime?at:null;
+   }else if(!allowed.has(type))throw Error('range_mint_extension_'+type);
+   o=start+len;
+  }
  }
- return {decimals:b[44]};
+ return {decimals:b[44],multiplier,valid_until,extensions};
 }
 function feeShare(account,spacing){
  const b=bytes(account,RAY,117);discriminator(b,[218,244,33,104,203,203,43,111]);
@@ -67,11 +80,12 @@ export async function collectRangeStates(pools,get){
   // belong to the same confirmed slot, rather than mixing successive states.
   const second=await readAccounts(addresses,get,first.slot),observed_at=new Date().toISOString();
   for(const {p} of valid){try{
-   const s=decodePoolState(p,second.accounts.get(p.address)),da=decodeMint(second.accounts.get(s.token_a)).decimals,db=decodeMint(second.accounts.get(s.token_b)).decimals;
+   const s=decodePoolState(p,second.accounts.get(p.address)),ma=decodeMint(second.accounts.get(s.token_a)),mb=decodeMint(second.accounts.get(s.token_b)),da=ma.decimals,db=mb.decimals;
    if(s.decimals_a!==undefined&&(s.decimals_a!==da||s.decimals_b!==db))throw Error('range_mint');
    const lp_fee_share=s.config?feeShare(second.accounts.get(s.config),s.tick_spacing):s.lp_fee_share;
    if(!(lp_fee_share>=0&&lp_fee_share<=1))throw Error('range_config');
-   states[p.key]={...s,decimals_a:da,decimals_b:db,lp_fee_share,status:'ok',version:1,slot:second.slot,observed_at,source:RPC};
+   const until=[ma.valid_until,mb.valid_until].filter(v=>v!==null);
+   states[p.key]={...s,decimals_a:da,decimals_b:db,multiplier_a:ma.multiplier,multiplier_b:mb.multiplier,multiplier_valid_until:until.length?Math.min(...until):null,mint_extensions_a:ma.extensions,mint_extensions_b:mb.extensions,lp_fee_share,status:'ok',version:1,slot:second.slot,observed_at,source:RPC};
   }catch(e){states[p.key]=unavailable(e.message);}}
  }
  for(const p of eligible.slice(96))states[p.key]=unavailable('range_batch_limit');

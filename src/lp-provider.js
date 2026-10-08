@@ -14,7 +14,7 @@ export async function publicJson(url,{maxBytes=18000000,timeout=14000,body}={}){
 const canonical=s=>String(s||'').trim().replace(/^w(?=[A-Z].*x$)/,'').replace(/x$/i,'').toUpperCase()+'x';
 export class PoolProvider{
  constructor(db,get=publicJson){this.db=db;this.get=get;}
- async rangeStates(symbol,pools){return this.once('clmm-state-v1:'+canonical(symbol),1,()=>collectRangeStates(pools,this.get));}
+ async rangeStates(symbol,pools){return this.once('clmm-state-v2:'+canonical(symbol),1,()=>collectRangeStates(pools,this.get));}
  async once(key,hours,fn,now=Date.now()){
   const bucket=new Date(Math.floor(now/(hours*HOUR))*hours*HOUR).toISOString();
   const reserved=await this.db.post('pr_lp_fetches',{cache_key:key,bucket,state:'working'},{on_conflict:'cache_key,bucket'},'resolution=ignore-duplicates,return=representation');
@@ -122,7 +122,7 @@ export class PoolProvider{
    for(const p of targets){p.clmm_state=result.states?.[p.key]||{status:'unavailable',reason:result.error||'range_data_missing'};if(p.clmm_state.status==='ok')usable++;}
    coverage.push({source:'Диапазоны Raydium / Orca · Solana',status:usable===targets.length?'ok':usable?'partial':'unavailable',checked:usable,total:targets.length});
   }
-  return {symbol:asset.symbol,asset,pools,coverage,checked_at:new Date().toISOString(),schema_version:2};
+  return {symbol:asset.symbol,asset,pools,coverage,checked_at:new Date().toISOString(),schema_version:3};
  }
 }
 export {canonical as canonicalXStock};
