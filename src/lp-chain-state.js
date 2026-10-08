@@ -31,7 +31,7 @@ export function decodeMint(account,unixTime=Math.floor(Date.now()/1000)){
  if(![TOKEN,TOKEN22].includes(account?.owner))throw Error('range_mint');
  const b=bytes(account,account.owner,82);if(b[45]!==1||b[44]>18)throw Error('range_mint');
  if(account.owner===TOKEN&&b.length!==82)throw Error('range_mint');
- let multiplier=1,valid_until=null;const extensions=[];
+ let multiplier=1,valid_until=null,effective_since=0;const extensions=[];
  if(b.length>82){
   if(b.length<166||b[165]!==1||b.slice(82,165).some(n=>n!==0))throw Error('range_mint');
   // xStocks initialize extra Token-2022 features even while disabled. Validate
@@ -47,12 +47,12 @@ export function decodeMint(account,unixTime=Math.floor(Date.now()/1000)){
    else if(type===25){
     if(len!==56)throw Error('range_mint');const view=new DataView(b.buffer),old=view.getFloat64(start+32,true),at=Number(view.getBigInt64(start+40,true)),next=view.getFloat64(start+48,true);
     if(![old,next].every(v=>Number.isFinite(v)&&v>0)||!Number.isSafeInteger(at))throw Error('range_mint_multiplier');
-    multiplier=unixTime>=at?next:old;valid_until=at>unixTime?at:null;
+    multiplier=unixTime>=at?next:old;valid_until=at>unixTime?at:null;effective_since=unixTime>=at?at:null;
    }else if(!allowed.has(type))throw Error('range_mint_extension_'+type);
    o=start+len;
   }
  }
- return {decimals:b[44],multiplier,valid_until,extensions};
+ return {decimals:b[44],multiplier,valid_until,effective_since,extensions};
 }
 function feeShare(account,spacing){
  const b=bytes(account,RAY,117);discriminator(b,[218,244,33,104,203,203,43,111]);
@@ -85,7 +85,7 @@ export async function collectRangeStates(pools,get){
    const lp_fee_share=s.config?feeShare(second.accounts.get(s.config),s.tick_spacing):s.lp_fee_share;
    if(!(lp_fee_share>=0&&lp_fee_share<=1))throw Error('range_config');
    const until=[ma.valid_until,mb.valid_until].filter(v=>v!==null);
-   states[p.key]={...s,decimals_a:da,decimals_b:db,multiplier_a:ma.multiplier,multiplier_b:mb.multiplier,multiplier_valid_until:until.length?Math.min(...until):null,mint_extensions_a:ma.extensions,mint_extensions_b:mb.extensions,lp_fee_share,status:'ok',version:1,slot:second.slot,observed_at,source:RPC};
+   states[p.key]={...s,decimals_a:da,decimals_b:db,multiplier_a:ma.multiplier,multiplier_b:mb.multiplier,multiplier_effective_since_a:ma.effective_since,multiplier_effective_since_b:mb.effective_since,multiplier_valid_until:until.length?Math.min(...until):null,mint_extensions_a:ma.extensions,mint_extensions_b:mb.extensions,lp_fee_share,status:'ok',version:1,slot:second.slot,observed_at,source:RPC};
   }catch(e){states[p.key]=unavailable(e.message);}}
  }
  for(const p of eligible.slice(96))states[p.key]=unavailable('range_batch_limit');

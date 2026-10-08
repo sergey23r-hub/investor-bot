@@ -142,10 +142,15 @@ export function normalizePosition(r){
 export function anchorRange(row,pools,now=Date.now()){
  if(row.range_basis_multiplier>0&&row.range_basis_stock)return row;
  const captured=Date.parse(row.range_captured_at||row.captured_at);
- if(!Number.isFinite(captured)||now-captured>5*60000||captured>now+60000)return row;
+ if(!Number.isFinite(captured)||captured>now+60000)return row;
  const pool=resolvePosition(row,pools).pool;if(!pool||!fresh(pool,now))return row;
  const estimate=rangeEstimate(row,pool,{existing:true,now,capture:true});
  if(estimate.status!=='ok')return row;
+ if(estimate.range_quote==='scaled'){
+  const s=pool.clmm_state,since=s.token_a===pool.stock_address?s.multiplier_effective_since_a:s.multiplier_effective_since_b;
+  if(since!==null&&since!==undefined&&since*1000>captured)return row;
+  if(now-captured>5*60000&&(since===null||since===undefined||since*1000>captured))return row;
+ }
  return {...row,range_quote:estimate.range_quote,range_basis_multiplier:estimate.stock_multiplier,range_basis_stock:pool.stock_address};
 }
 export function correctPosition(rows,text){

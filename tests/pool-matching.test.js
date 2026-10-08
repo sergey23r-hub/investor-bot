@@ -128,4 +128,11 @@ test('confirming a recent scaled screenshot saves its original denomination for 
  await p.callback({id:90},42,'save',id);
  assert.equal(h.records.pr_lp_profiles[0].positions[0].range_basis_multiplier,2);assert.equal(h.commits,1);
 });
+test('scheduled range anchoring preserves saved bounds, capture time and profile version',async()=>{
+ const h=harness(),p=h.radar.pools,profile=h.records.pr_lp_profiles[0];
+ profile.positions=[{...row,pool_address:address,network:'Solana',platform:'Raydium',capital_usd:100,range_quote:'scaled',range_lower:.25,range_upper:2}];
+ const before=structuredClone(profile),state={status:'ok',version:1,observed_at:iso,slot:100,token_a:'stock',token_b:'usdc',decimals_a:0,decimals_b:0,liquidity:'10000',sqrt_price_x64:'18446744073709551616',tick_current:0,tick_spacing:1,lp_fee_share:.84,multiplier_a:2,multiplier_b:1,multiplier_effective_since_a:0};
+ await p.anchorProfiles('MSFTx',[{...pool,stock_address:'stock',usdc_address:'usdc',clmm_state:state}]);
+ assert.equal(profile.positions[0].range_basis_multiplier,2);assert.equal(profile.version,before.version);assert.equal(profile.updated_at,before.updated_at);assert.equal(profile.positions[0].range_lower,before.positions[0].range_lower);assert.equal(profile.positions[0].captured_at,before.positions[0].captured_at);
+});
 

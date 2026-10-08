@@ -39,6 +39,8 @@ test('xStocks extensions respect live pauses/hooks and scheduled split or divide
  assert.equal(decodeMint(xstockMint()).multiplier,1);
  assert.equal(decodeMint(xstockMint({multiplier:2,newMultiplier:3,at:200}),100).multiplier,2);
  assert.equal(decodeMint(xstockMint({multiplier:2,newMultiplier:3,at:200}),201).multiplier,3);
+ assert.equal(decodeMint(xstockMint({multiplier:2,newMultiplier:3,at:200}),201).effective_since,200);
+ assert.equal(decodeMint(xstockMint({multiplier:2,newMultiplier:3,at:200}),100).effective_since,null);
  assert.equal(decodeMint(xstockMint({multiplier:2,newMultiplier:3,at:200}),100).valid_until,200);
  for(const options of [{paused:true},{hook:true},{frozen:true},{newMultiplier:NaN},{newMultiplier:0}])assert.throws(()=>decodeMint(xstockMint(options)));
 });
@@ -65,9 +67,9 @@ test('range snapshots and RPC failures are shared per asset and hour across user
 });
 test('scheduled rollout enriches one existing snapshot without refreshing its fees or quotes',async()=>{
  const iso=new Date().toISOString(),names=['MSFTx','TSLAx','NVDAx','SPYx','QQQx','COINx','AAPLx'];
- const markets=names.map(symbol=>({symbol,updated_at:iso,data:{symbol,checked_at:iso,schema_version:symbol==='MSFTx'?1:3,pools:[{...rp,observed_at:iso}],coverage:[]}}));
+ const markets=names.map(symbol=>({symbol,updated_at:iso,data:{symbol,checked_at:iso,schema_version:symbol==='MSFTx'?1:4,pools:[{...rp,observed_at:iso}],coverage:[]}}));
  const writes=[],radar={db:{rpc:async(name)=>name==='pr_lp_lock'?true:[],get:async()=>markets,post:async(t,row)=>writes.push(row)}};
  const p=new Pools(radar);let reads=0;p.provider.collect=async()=>{throw Error('no market refresh required');};p.provider.rangeStates=async(symbol,rows)=>{reads++;assert.equal(symbol,'MSFTx');return {states:{[rp.key]:{status:'ok'}}};};
- await p.work();assert.equal(reads,1);assert.equal(writes.length,1);assert.equal(writes[0].updated_at,iso);assert.equal(writes[0].data.checked_at,iso);assert.equal(writes[0].data.pools[0].observed_at,iso);assert.equal(writes[0].data.schema_version,3);
+ await p.work();assert.equal(reads,1);assert.equal(writes.length,1);assert.equal(writes[0].updated_at,iso);assert.equal(writes[0].data.checked_at,iso);assert.equal(writes[0].data.pools[0].observed_at,iso);assert.equal(writes[0].data.schema_version,4);
  assert.equal(writes[0].data.pools[0].clmm_state.status,'ok');
 });

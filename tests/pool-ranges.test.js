@@ -114,3 +114,10 @@ test('a multiplier change preserves captured scaled position ticks and does not 
  assert.equal(anchorRange({...input,captured_at:'2000-01-01'},four,now).range_basis_multiplier,undefined);
  const edited=correctPosition([saved],'/poolfix 1 минимум=0.3 максимум=1.4');assert.equal(edited[0].range_basis_multiplier,null);
 });
+test('legacy scaled ranges can be anchored only if the on-chain multiplier was already active when captured',()=>{
+ const captured=Math.floor(now/1000)-86400,lo=1.0001**-10000,hi=1.0001**10000;
+ const input={...row,range_lower:lo/2,range_upper:hi/2,captured_at:new Date(captured*1000).toISOString()};
+ const pools=[current,candidate].map(p=>({...p,clmm_state:{...state,multiplier_a:2,multiplier_b:1,multiplier_effective_since_a:captured-10000}}));
+ const anchored=anchorRange(input,pools,now);assert.equal(anchored.range_quote,'scaled');assert.equal(anchored.range_basis_multiplier,2);assert.ok(comparison(anchored,pools,now).delta>0);
+ for(const since of [null,undefined,captured+10000]){const bad=pools.map(p=>({...p,clmm_state:{...p.clmm_state,multiplier_effective_since_a:since}}));assert.equal(anchorRange(input,bad,now).range_basis_multiplier,undefined);}
+});

@@ -96,6 +96,17 @@ export class Pools{
   const all=pools||(await this.markets()).flatMap(m=>m.data?.pools||[]),rows=imp.rows.map(r=>anchorRange(r,all));
   if(JSON.stringify(rows)!==JSON.stringify(imp.rows))await this.db.patch('pr_lp_imports',{rows},{id:'eq.'+id,user_id:'eq.'+user,status:'eq.preview',last_edit_key:imp.last_edit_key?'eq.'+imp.last_edit_key:'is.null'});
  }
+ async anchorProfiles(symbol,pools){
+  for(let offset=0;offset<10000;offset+=100){
+   const profiles=await this.db.get('pr_lp_profiles',{positions:'cs.'+JSON.stringify([{symbol}]),order:'user_id.asc',limit:100,offset});
+   for(const profile of profiles){
+    if(!Array.isArray(profile.positions))continue;
+    const positions=profile.positions.map(r=>r.symbol===symbol?anchorRange({...r,captured_at:r.captured_at||profile.updated_at},pools):r);
+    if(JSON.stringify(positions)!==JSON.stringify(profile.positions))await this.db.patch('pr_lp_profiles',{positions},{user_id:'eq.'+profile.user_id,version:'eq.'+profile.version,updated_at:'eq.'+profile.updated_at});
+   }
+   if(profiles.length<100)break;
+  }
+ }
  async match(job,user){
   if(!await this.require(job,user))return;
   if(await this.radar.currentImport(user))return this.radar.reply(job,user,'Сначала сохраните или отмените загрузку обычного портфеля через /cancel.');
@@ -240,17 +251,19 @@ export class Pools{
      latest.asset ||=previous.asset;
     }
     await this.db.post('pr_lp_market',{symbol,data:latest,updated_at:new Date().toISOString()},{on_conflict:'symbol'},'resolution=merge-duplicates,return=minimal');
+    await this.anchorProfiles(symbol,latest.pools);
    }else{
     // Roll out the new shared chain snapshot one asset per scheduled job.
     // Existing rolling-fee observations keep their actual timestamps; this is
     // not a user-triggered market refresh and cannot generate an alert alone.
-    const initial=symbols.map(s=>bySymbol.get(s)).find(m=>m&&m.data.schema_version!==3);
+    const initial=symbols.map(s=>bySymbol.get(s)).find(m=>m&&m.data.schema_version!==4);
     if(initial){
      const result=await this.provider.rangeStates(initial.symbol,initial.data.pools||[]);
      const pools=(initial.data.pools||[]).map(p=>p.chain==='solana'&&p.concentrated&&['Raydium','Orca'].includes(p.platform)?{...p,clmm_state:result.states?.[p.key]||{status:'unavailable',reason:result.error||'range_data_missing'}}:p);
      const states=pools.filter(p=>p.clmm_state),checked=states.filter(p=>p.clmm_state.status==='ok').length;
-     const data={...initial.data,pools,schema_version:3,coverage:[...(initial.data.coverage||[]),{source:'Диапазоны Raydium / Orca · Solana',status:checked===states.length&&checked?'ok':checked?'partial':'unavailable',checked,total:states.length}]};
+     const data={...initial.data,pools,schema_version:4,coverage:[...(initial.data.coverage||[]),{source:'Диапазоны Raydium / Orca · Solana',status:checked===states.length&&checked?'ok':checked?'partial':'unavailable',checked,total:states.length}]};
      await this.db.post('pr_lp_market',{symbol:initial.symbol,data,updated_at:initial.updated_at},{on_conflict:'symbol'},'resolution=merge-duplicates,return=minimal');
+     await this.anchorProfiles(initial.symbol,pools);
     }
    }
    for(const item of await this.db.rpc('pr_lp_due')){const profile=await this.profile(item.user_id);await this.automatic(item.user_id,`lp:daily:${item.user_id}:${item.service_day}`,'daily',profile);}
